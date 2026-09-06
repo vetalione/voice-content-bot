@@ -63,24 +63,7 @@ paid. Never as the whole post.
 - `readiness_score` — 0–10, how publishable this draft is as-is
 - `draft` — the final Threads post text, ready to paste
 
-## Output
-
-Return **JSON only**:
-
-```
-{
-  "candidates": [
-    {
-      "atom_id": "a1",
-      "angle": "...",
-      "why_it_works": "...",
-      "readiness_score": 0,
-      "draft": "..."
-    }
-  ],
-  "rejected": ["a2 — слишком общая мысль"]
-}
-```
+Return JSON matching the supplied schema. Keep rationales and beat summaries brief.
 
 ## Author voice reference
 

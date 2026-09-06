@@ -1,6 +1,7 @@
 # VOICE STYLE
 
-This file is injected into **every** AI stage (miner, teaser, Threads, Reels).
+Relevant sections are injected per stage. Editors share tone and exclusions;
+Threads/Reels receive only their own examples. The miner receives exclusions only.
 It is the single most effective place to make output sound like you.
 
 Fill it in gradually. Real examples beat abstract adjectives — two or three of

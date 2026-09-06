@@ -422,3 +422,35 @@ plain text (no parse mode), so nothing your recording contains can break it.
 6. Run `python scripts/set_webhook.py set` once the service is live.
 7. Fill in `prompts/VOICE_STYLE.md` — nothing else affects output quality as much.
 8. Optionally: point an uptime pinger at `/health` to reduce cold starts.
+
+### Groq free-tier request budgets
+
+The pipeline uses separate output caps (the legacy `GROQ_LLM_MAX_TOKENS` only
+applies to direct client calls without a stage budget):
+
+```env
+GROQ_MINING_MAX_TOKENS=1200
+GROQ_TEASER_MAX_TOKENS=400
+GROQ_THREADS_MAX_TOKENS=1200
+GROQ_REELS_MAX_TOKENS=1600
+GROQ_TPM_LIMIT=8000
+THREADS_BATCH_SIZE=2
+REELS_BATCH_SIZE=2
+```
+
+Threads/Reels process every eligible atom in sequential batches, split oversized
+batches further, then rank all candidates locally before applying the final
+candidate limit. A single oversized atom or prompt fails locally rather than
+repeating a request that cannot fit. Request logs include approximate input
+counts (UTF-8 bytes / 3, plus overhead) and the output cap. This estimate is
+conservative, not an exact model tokenizer or a guarantee of Groq acceptance.
+
+Temporary 429s honor `Retry-After`; TPM errors without that header wait 60 seconds.
+Retries remain bounded by `GROQ_MAX_RETRIES`. Explicit provider size errors are
+not retried. Owner failure reports occur after retry exhaustion (or immediately
+for permanent errors). No paid fallback or automatic tier upgrade is used.
+
+Style guidance excludes comments, placeholders and examples belonging to another
+editor. The miner receives only publication exclusions. Teasers use up to six
+atoms, without resending the transcript opening. Large custom prompts can still
+exceed the budget; shorten them if the local size guard reports an error.

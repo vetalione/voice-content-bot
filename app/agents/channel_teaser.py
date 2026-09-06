@@ -43,11 +43,15 @@ class ChannelTeaserAgent(StructuredAgent):
             f"Recording duration: {format_timecode(transcript.duration)}.\n"
             f"Detected language: {transcript.language or 'unknown'}.\n\n"
             "CONTENT ATOMS FOUND IN THIS RECORDING:\n"
-            f"{render_atoms(atoms)}\n\n"
-            "TRANSCRIPT OPENING (for tone reference):\n"
-            f"{transcript.text[:2500]}"
+            f"{render_atoms(atoms[:6])}"
         )
-        teaser = await self.request(ChannelTeaser, system=system, user=user, temperature=0.75)
+        teaser = await self.request(
+            ChannelTeaser,
+            system=system,
+            user=user,
+            temperature=0.75,
+            max_tokens=self.settings.groq_teaser_max_tokens,
+        )
         if not timestamps_allowed:
             teaser.timestamps = []
         else:

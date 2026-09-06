@@ -59,31 +59,7 @@ Each Reel is built from beats, then written out as one continuous script:
   on the mechanism — why this holds attention.
 - `score` is 0–10 for expected performance.
 
-## Output
-
-Return **JSON only**:
-
-```
-{
-  "candidates": [
-    {
-      "atom_id": "a1",
-      "concept": "...",
-      "why_it_works": "...",
-      "score": 0,
-      "target_duration_seconds": 60,
-      "hook": "...",
-      "setup": "...",
-      "development": "...",
-      "payoff": "...",
-      "ending": "...",
-      "on_screen_text": ["..."],
-      "script": "..."
-    }
-  ],
-  "rejected": ["a5 — нет сцены, только рассуждение"]
-}
-```
+Return JSON matching the supplied schema. Keep rationales and beat summaries brief.
 
 ## Author voice reference
 

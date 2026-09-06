@@ -14,7 +14,6 @@ from app.models.atoms import AtomCategory, ContentAtom
 from app.models.content import ReelsBatch, ReelsCandidate
 
 from .base import StructuredAgent
-from .rendering import render_atoms
 
 logger = logging.getLogger(__name__)
 
@@ -56,14 +55,15 @@ class ReelsEditorAgent(StructuredAgent):
 
         ranked = rank_for_reels(atoms)
         limit = self.settings.max_reels_candidates
-        system = self.system_prompt(max_reels=limit)
-        user = (
-            "Atoms are pre-sorted by expected Reels potential. Disagree freely.\n"
-            f"Produce at most {limit} Reels. Do not force every atom into a Reel — "
-            "select only the ones that genuinely work on camera.\n\n"
-            f"{render_atoms(ranked)}"
+        batch = await self.request_atom_batches(
+            ReelsBatch,
+            ranked,
+            batch_size=self.settings.reels_batch_size,
+            limit=limit,
+            max_tokens=self.settings.groq_reels_max_tokens,
+            temperature=0.85,
+            placeholder="max_reels",
         )
-        batch = await self.request(ReelsBatch, system=system, user=user, temperature=0.85)
         batch.candidates = self._align(batch.candidates, atoms)[:limit]
         logger.info(
             "Reels editor produced %s candidate(s), rejected %s",

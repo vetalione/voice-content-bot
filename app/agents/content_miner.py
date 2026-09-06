@@ -126,7 +126,9 @@ class ContentMinerAgent(StructuredAgent):
                 "TRANSCRIPT WINDOW:\n"
                 f"{window.text}"
             )
-            result = await self.request(ContentAtomSet, system=system, user=user)
+            result = await self.request(
+                ContentAtomSet, system=system, user=user, max_tokens=settings.groq_mining_max_tokens
+            )
             for position, atom in enumerate(result.atoms):
                 atom.id = f"w{window.index + 1}a{position + 1}"
                 # Clamp hallucinated timestamps back into this window.

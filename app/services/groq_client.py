@@ -14,12 +14,16 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from app.config import Settings
+from app.services.token_budget import request_tokens
 from app.utils.retry import RetryableError, retry_async
 
 logger = logging.getLogger(__name__)
@@ -62,16 +66,25 @@ class GroqClient:
         try:
             return max(0.0, float(raw))
         except ValueError:
-            return None
+            try:
+                return max(0.0, (parsedate_to_datetime(raw) - datetime.now(UTC)).total_seconds())
+            except (ValueError, TypeError, OverflowError):
+                return None
 
     def _raise_for_status(self, response: httpx.Response, label: str) -> None:
         if response.status_code < 400:
             return
         body = response.text[:800]
         if response.status_code == 429:
+            sizes = re.search(r"Limit\s+([\d,]+).*?Requested\s+([\d,]+)", body, re.I)
+            if sizes and int(sizes[2].replace(",", "")) > int(sizes[1].replace(",", "")):
+                raise GroqError(f"{label}: request exceeds TPM capacity: {body}", status_code=429)
+            delay = self._retry_after(response)
+            if delay is None and ("TPM" in body or "tokens per minute" in body.lower()):
+                delay = 60.0
             raise RetryableError(
                 f"{label}: Groq rate limit / quota (429): {body}",
-                retry_after=self._retry_after(response),
+                retry_after=delay,
             )
         if response.status_code >= 500:
             raise RetryableError(f"{label}: Groq server error ({response.status_code}): {body}")
@@ -163,6 +176,21 @@ class GroqClient:
         settings = self._settings
         target_model = model or settings.groq_llm_model
         use_schema = bool(schema) and settings.groq_use_json_schema
+        output_budget = max_tokens if max_tokens is not None else settings.groq_llm_max_tokens
+        input_estimate = request_tokens(system, user, schema)
+        logger.info(
+            "LLM %s model=%s approximate_input_tokens=%s output_budget=%s tpm_limit=%s",
+            label,
+            target_model,
+            input_estimate,
+            output_budget,
+            settings.groq_tpm_limit,
+        )
+        if input_estimate + output_budget > settings.groq_tpm_limit:
+            raise GroqError(
+                f"{label}: estimated request size {input_estimate} + output budget "
+                f"{output_budget} exceeds TPM limit {settings.groq_tpm_limit}; split input"
+            )
 
         def payload(with_schema: bool) -> dict[str, Any]:
             body: dict[str, Any] = {
@@ -174,7 +202,7 @@ class GroqClient:
                 "temperature": (
                     settings.groq_llm_temperature if temperature is None else temperature
                 ),
-                "max_tokens": max_tokens or settings.groq_llm_max_tokens,
+                "max_tokens": output_budget,
             }
             if with_schema and schema:
                 body["response_format"] = {

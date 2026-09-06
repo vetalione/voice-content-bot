@@ -51,7 +51,7 @@ async def retry_async(
             if delay is None:
                 delay = min(max_delay, base_delay * (2 ** (attempt - 1)))
                 delay += random.uniform(0, base_delay / 2)
-            delay = min(float(delay), max_delay)
+            delay = max(0.0, float(delay))
             logger.warning(
                 "%s failed (attempt %s/%s): %s — retrying in %.1fs",
                 label,

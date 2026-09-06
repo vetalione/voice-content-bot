@@ -48,10 +48,26 @@ class PromptLibrary:
             self._cache[key] = text
         return text
 
-    def voice_style(self) -> str:
+    def voice_style(self, stage: str | None = None) -> str:
         """The owner's personal voice guide; optional but expected."""
         try:
-            return self.load(VOICE_STYLE_FILE)
+            text = self.load(VOICE_STYLE_FILE)
+            if stage is None:
+                return text
+            text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+            sections = re.split(r"(?m)^## ", text)[1:]
+            selected = []
+            for section in sections:
+                heading = section.split("\n", 1)[0].strip()
+                if stage == "content_miner" and heading != "Topics I do NOT want published":
+                    continue
+                if heading == "Threads examples" and stage != "threads_editor":
+                    continue
+                if heading == "Reels examples" and stage != "reels_editor":
+                    continue
+                lines = [line for line in section.splitlines() if "TODO" not in line]
+                selected.append("## " + "\n".join(lines))
+            return "# VOICE STYLE\n" + "\n".join(selected)
         except PromptNotFoundError:
             logger.warning("%s is missing; continuing without a voice guide", VOICE_STYLE_FILE)
             return ""
