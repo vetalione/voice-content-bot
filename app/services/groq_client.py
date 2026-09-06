@@ -108,6 +108,9 @@ class GroqClient:
     ) -> dict[str, Any]:
         """Call ``/audio/transcriptions`` and return the parsed JSON payload."""
 
+        # Telegram uses .oga for Ogg audio; Groq requires the .ogg filename alias.
+        upload_name = path.with_suffix(".ogg").name if path.suffix.lower() == ".oga" else path.name
+
         async def call() -> dict[str, Any]:
             data: dict[str, str] = {
                 "model": model,
@@ -119,7 +122,7 @@ class GroqClient:
             if prompt:
                 data["prompt"] = prompt
             with path.open("rb") as handle:
-                files = {"file": (path.name, handle, "application/octet-stream")}
+                files = {"file": (upload_name, handle, "application/octet-stream")}
                 response = await self._client.post(
                     "/audio/transcriptions",
                     data={

@@ -62,6 +62,30 @@ async def _no_sleep(_delay: float) -> None:
 
 
 # ---------------------------------------------------------------- groq client ---
+@pytest.mark.parametrize("suffix", [".oga", ".OGA", ".ogg", ".mp3"])
+async def test_transcription_upload_filename(settings, tmp_path, suffix):
+    path = tmp_path / f"source{suffix}"
+    audio = b"OggS-test-audio-payload"
+    path.write_bytes(audio)
+    expected_name = "source.ogg" if suffix.lower() == ".oga" else path.name
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = await request.aread()
+        assert request.url.path.endswith("/audio/transcriptions")
+        assert f'filename="{expected_name}"'.encode() in body
+        assert audio in body
+        return httpx.Response(200, json={"text": "transcribed"})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url=settings.groq_base_url
+    ) as http:
+        client = GroqClient(settings, client=http)
+        assert await client.transcribe_file(path, model=settings.groq_whisper_model) == {
+            "text": "transcribed"
+        }
+    assert path.read_bytes() == audio
+
+
 async def test_rate_limit_is_retried_then_raised_as_quota_error(settings, monkeypatch):
     monkeypatch.setattr("app.utils.retry.asyncio.sleep", _no_sleep)
     settings = settings.model_copy(update={"groq_max_retries": 2, "groq_retry_base_delay": 0.0})

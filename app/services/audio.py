@@ -27,7 +27,7 @@ from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
-# Container/extension list accepted by Groq's transcription endpoint.
+# Uploadable formats, including .oga (renamed to .ogg by GroqClient on upload).
 GROQ_SUPPORTED_EXTENSIONS = frozenset(
     {".flac", ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".ogg", ".oga", ".opus", ".wav", ".webm"}
 )
