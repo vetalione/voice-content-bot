@@ -1,10 +1,7 @@
-"""Content miner: finds independent content atoms across the whole transcript.
+"""Two-stage mining: minimal extraction, then single-atom enrichment.
 
-Deliberately *not* a summariser. A single summary of a 20-minute recording
-collapses six usable ideas into one paragraph, and everything generated from it
-inherits that loss. Instead the transcript is walked window by window (default
-20 minutes with a 1-minute overlap) and each window is mined for standalone
-atoms. Atoms are then de-duplicated across window seams.
+Text windows are capped at two minutes with at most 15 seconds of overlap.
+Generation recovery retries once, then halves text once; it never redoes STT.
 """
 
 from __future__ import annotations
@@ -12,7 +9,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from app.models.atoms import ContentAtom, ContentAtomSet
+from app.models.atoms import AtomEnrichment, AtomExtraction, ContentAtom, ContentAtomSet
 from app.models.transcript import Transcript, TranscriptSegment
 from app.services.groq_client import GroqGenerationError
 from app.utils.text import token_overlap_ratio
@@ -105,8 +102,8 @@ class ContentMinerAgent(StructuredAgent):
         settings = self.settings
         windows = build_windows(
             transcript,
-            window_seconds=settings.miner_window_minutes * 60,
-            overlap_seconds=settings.miner_window_overlap_minutes * 60,
+            window_seconds=min(settings.miner_window_minutes * 60, 120),
+            overlap_seconds=min(settings.miner_window_overlap_minutes * 60, 15),
         )
         if not windows:
             logger.warning("Nothing to mine: empty transcript")
@@ -127,7 +124,37 @@ class ContentMinerAgent(StructuredAgent):
                 "TRANSCRIPT WINDOW:\n"
                 f"{window.text}"
             )
-            result = await self._mine_window(window, system, user)
+            extraction = await self._mine_window(window, system, user)
+            enriched = []
+            for position, seed in enumerate(extraction):
+                start = min(max(seed.start_seconds, window.start), window.end)
+                end = min(max(seed.end_seconds, start), window.end)
+                excerpt = " ".join(
+                    seg.text for seg in window.segments if seg.end > start and seg.start <= end
+                )[:1200]
+                metadata = await self.request(
+                    AtomEnrichment,
+                    system=self.prompts.render(
+                        "content_enrichment.md",
+                        voice_style=self.prompts.voice_style("content_miner"),
+                    ),
+                    user=f"Title: {seed.title}\nIdea: {seed.idea}\nType: {seed.type}\nSource excerpt: {excerpt}",
+                    max_tokens=self.settings.groq_mining_max_tokens,
+                    request_label=f"content_enrichment/window={window.index + 1}/atom={position + 1}",
+                )
+                enriched.append(
+                    ContentAtom(
+                        id=f"a{position + 1}",
+                        label=seed.title,
+                        key_claim=seed.idea,
+                        description=seed.idea,
+                        supporting_context=excerpt,
+                        start_seconds=start,
+                        end_seconds=end,
+                        **metadata.model_dump(),
+                    )
+                )
+            result = ContentAtomSet(atoms=enriched)
             for position, atom in enumerate(result.atoms):
                 atom.id = f"w{window.index + 1}a{position + 1}"
                 # Clamp hallucinated timestamps back into this window.
@@ -148,42 +175,42 @@ class ContentMinerAgent(StructuredAgent):
         )
         return ContentAtomSet(atoms=deduped, notes="\n".join(notes)[:2000])
 
-    async def _mine_window(self, window, system, user, depth=0):
-        try:
-            result = await self.request(
-                ContentAtomSet,
-                system=system,
-                user=user,
-                max_tokens=self.settings.groq_mining_max_tokens,
+    async def _extract(self, window, system, user, attempt):
+        result = await self.request(
+            AtomExtraction,
+            system=system,
+            user=user,
+            max_tokens=self.settings.groq_extraction_max_tokens,
+            request_label=f"content_extraction/window={window.index + 1}:{window.label}/attempt={attempt}",
+            repair_attempts=1,
+        )
+        for atom in result.atoms:
+            atom.start_seconds = min(max(atom.start_seconds, window.start), window.end)
+            atom.end_seconds = min(max(atom.end_seconds, atom.start_seconds), window.end)
+        return result
+
+    async def _mine_window(self, window, system, user):
+        # The shared client's scheduler retains failed reservations and applies a
+        # cooldown before each subsequent attempt. No audio/STT work occurs here.
+        for attempt in (1, 2):
+            try:
+                return (await self._extract(window, system, user, attempt)).atoms
+            except GroqGenerationError:
+                if attempt == 1:
+                    logger.warning(
+                        "Extraction window %s failed; retry once through TPM scheduler",
+                        window.label,
+                    )
+        if len(window.segments) < 2:
+            raise GroqGenerationError("Extraction failed twice; text window cannot be reduced")
+        mid = len(window.segments) // 2
+        atoms = []
+        logger.warning("Extraction window %s failed twice; reduce TEXT window once", window.label)
+        for index, segments in enumerate((window.segments[:mid], window.segments[mid:]), 1):
+            part = TranscriptWindow(window.index, segments[0].start, segments[-1].end, segments)
+            result = await self._extract(
+                part, system, f"TRANSCRIPT WINDOW:\n{part.text}", f"reduced-{index}"
             )
-            for atom in result.atoms:
-                atom.start_seconds = min(max(atom.start_seconds, window.start), window.end)
-                atom.end_seconds = min(max(atom.end_seconds, atom.start_seconds), window.end)
-            return result
-        except GroqGenerationError:
-            if depth >= 4 or len(window.segments) < 2:
-                raise
-            mid = len(window.segments) // 2
-            results = []
-            logger.warning(
-                "Mining JSON generation failed; splitting window %s (depth=%s)",
-                window.label,
-                depth + 1,
-            )
-            for segments in (window.segments[:mid], window.segments[mid:]):
-                part = TranscriptWindow(
-                    index=window.index,
-                    start=segments[0].start,
-                    end=segments[-1].end,
-                    segments=segments,
-                )
-                part_user = (
-                    "Extract compact atoms from this smaller transcript window. "
-                    "Timestamps are absolute seconds in the original recording.\n"
-                    f"TRANSCRIPT WINDOW:\n{part.text}"
-                )
-                results.append(await self._mine_window(part, system, part_user, depth + 1))
-            return ContentAtomSet(
-                atoms=[a for result in results for a in result.atoms],
-                notes="\n".join(result.notes for result in results)[:2000],
-            )
+            atoms.extend(result.atoms)
+        # Each reduced window separately observes the six-atom limit.
+        return atoms

@@ -1,0 +1,92 @@
+"""Conservative in-process rolling TPM admission, including failed attempts.
+
+One shared GroqClient is used by the pipeline. Multiple processes/other API users
+still require provider headers and 429 handling; this is not a distributed quota.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+import time
+from collections import deque
+
+logger = logging.getLogger(__name__)
+
+
+def duration_seconds(raw: str | None) -> float:
+    if not raw:
+        return 0.0
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        parts = re.findall(r"([\d.]+)(ms|s|m|h)", raw)
+        return sum(float(n) * {"ms": 0.001, "s": 1, "m": 60, "h": 3600}[unit] for n, unit in parts)
+
+
+class RollingTPM:
+    def __init__(self, limit: int, *, clock=None, sleep=None):
+        self.limit = limit
+        self.clock = clock or time.monotonic
+        self.sleep = sleep or asyncio.sleep
+        self.events: deque[tuple[float, int]] = deque()
+        self.lock = asyncio.Lock()
+        self.blocked_until = 0.0
+        self.remote_remaining: int | None = None
+        self.remote_until = 0.0
+
+    async def reserve(
+        self, tokens: int, *, label: str, attempt: int, input_tokens: int, output: int
+    ):
+        if tokens > self.limit:
+            raise ValueError("Single request exceeds TPM capacity")
+        async with self.lock:
+            while True:
+                now = self.clock()
+                while self.events and self.events[0][0] + 60 <= now:
+                    self.events.popleft()
+                used = sum(n for _, n in self.events)
+                wait = max(0.0, self.blocked_until - now)
+                if used + tokens > self.limit:
+                    remaining = used
+                    for stamp, size in self.events:
+                        remaining -= size
+                        if remaining + tokens <= self.limit:
+                            wait = max(wait, stamp + 60 - now)
+                            break
+                if (
+                    self.remote_until > now
+                    and self.remote_remaining is not None
+                    and tokens > self.remote_remaining
+                ):
+                    wait = max(wait, self.remote_until - now)
+                logger.info(
+                    "LLM schedule stage/window=%s attempt=%s input_tokens=%s output_budget=%s rolling_tpm_estimate=%s wait_before_request=%.2fs",
+                    label,
+                    attempt,
+                    input_tokens,
+                    output,
+                    used,
+                    wait,
+                )
+                if wait > 0:
+                    await self.sleep(min(wait, 60.0))
+                    continue
+                self.events.append((self.clock(), tokens))
+                if self.remote_until > now and self.remote_remaining is not None:
+                    self.remote_remaining = max(0, self.remote_remaining - tokens)
+                return
+
+    def observe(self, headers, *, generation_failed=False):
+        now = self.clock()
+        reset = duration_seconds(headers.get("x-ratelimit-reset-tokens"))
+        try:
+            self.remote_remaining = int(headers["x-ratelimit-remaining-tokens"])
+            self.remote_until = now + (reset or 60.0)
+        except (KeyError, ValueError):
+            pass
+        # Keep reservations on errors. A failed generation is never free capacity.
+        if generation_failed:
+            retry = duration_seconds(headers.get("retry-after"))
+            self.blocked_until = max(self.blocked_until, now + max(60.0, reset, retry))

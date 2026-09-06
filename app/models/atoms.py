@@ -134,3 +134,27 @@ class ContentAtomSet(BaseModel):
 
     def usable(self, min_confidence: float) -> list[ContentAtom]:
         return [atom for atom in self.atoms if atom.usable(min_confidence)]
+
+
+class ExtractedAtom(BaseModel):
+    """Minimal first-pass extraction; no editorial metadata."""
+
+    title: str = Field(min_length=1, max_length=100)
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(ge=0)
+    idea: str = Field(min_length=1, max_length=240)
+    type: str = Field(min_length=1, max_length=40)
+
+
+class AtomExtraction(BaseModel):
+    atoms: list[ExtractedAtom] = Field(max_length=6)
+
+
+class AtomEnrichment(BaseModel):
+    categories: list[AtomCategory]
+    business_score: float = Field(ge=0, le=10)
+    personal_score: float = Field(ge=0, le=10)
+    novelty_score: float = Field(ge=0, le=10)
+    confidence: float = Field(ge=0, le=1)
+    should_ignore: bool
+    ignore_reason: str = Field(max_length=200)

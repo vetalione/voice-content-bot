@@ -53,39 +53,38 @@ def test_truncated_generation_is_never_accepted(content):
 
 
 async def test_miner_splits_failed_window_without_losing_segments(settings):
+    from app.agents.content_miner import TranscriptWindow
+
     calls = []
 
     class LLM:
         async def chat_json(self, **kwargs):
             calls.append(kwargs)
-            if len(calls) == 1:
+            if len(calls) <= 2:
                 raise GroqGenerationError("invalid JSON")
             return {
                 "atoms": [
                     {
-                        "id": "x",
-                        "label": "idea",
+                        "title": "idea",
+                        "idea": "thought",
+                        "type": "idea",
                         "start_seconds": 0,
                         "end_seconds": 20,
-                        "confidence": 0.9,
                     }
                 ]
             }
 
-    transcript = Transcript(
-        duration=40,
-        segments=[
-            TranscriptSegment(start=i * 10, end=(i + 1) * 10, text=f"unique{i}") for i in range(4)
-        ],
-    )
-    result = await ContentMinerAgent(LLM(), PromptLibrary(settings.prompts_dir), settings).mine(
-        transcript
-    )
-    assert len(calls) == 3
+    segments = [
+        TranscriptSegment(start=i * 10, end=(i + 1) * 10, text=f"unique{i}") for i in range(4)
+    ]
+    agent = ContentMinerAgent(LLM(), PromptLibrary(settings.prompts_dir), settings)
+    result = await agent._mine_window(TranscriptWindow(0, 0, 40, segments), "s", "full")
+    assert len(calls) == 4
+    assert calls[0]["user"] == calls[1]["user"]
     for i in range(4):
-        assert sum(f"unique{i}" in c["user"] for c in calls[1:]) == 1
-    assert all(c["max_tokens"] == 1200 for c in calls)
-    assert len(result.atoms) == 2
+        assert sum(f"unique{i}" in c["user"] for c in calls[2:]) == 1
+    assert all(c["max_tokens"] == 800 for c in calls)
+    assert len(result) == 2
 
 
 async def test_miner_generation_failure_is_bounded(settings):
@@ -104,4 +103,4 @@ async def test_miner_generation_failure_is_bounded(settings):
         await ContentMinerAgent(LLM(), PromptLibrary(settings.prompts_dir), settings).mine(
             transcript
         )
-    assert len(calls) == 5
+    assert len(calls) == 3  # original, one retry, first reduced window; no recursion

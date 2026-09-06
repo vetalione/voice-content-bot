@@ -391,7 +391,8 @@ process:
 
 | File | Role |
 |---|---|
-| `content_miner.md` | how to find and score content atoms |
+| `content_miner.md` | minimal extraction of at most six atoms |
+| `content_enrichment.md` | score and classify one atom using its source excerpt |
 | `channel_teaser.md` | the public teaser: 2–5 sentences, no corporate language |
 | `threads_editor.md` | selection rules and writing rules for Threads |
 | `reels_editor.md` | Reels selection, beat structure, scripting rules |
@@ -434,6 +435,7 @@ The pipeline uses separate output caps (the legacy `GROQ_LLM_MAX_TOKENS` only
 applies to direct client calls without a stage budget):
 
 ```env
+GROQ_EXTRACTION_MAX_TOKENS=800
 GROQ_MINING_MAX_TOKENS=1200
 GROQ_TEASER_MAX_TOKENS=400
 GROQ_THREADS_MAX_TOKENS=1200
@@ -461,12 +463,30 @@ atoms, without resending the transcript opening. Large custom prompts can still
 exceed the budget; shorten them if the local size guard reports an error.
 
 GPT-OSS requests use `reasoning_effort=low` to preserve the small response budget.
-JSON-mode fallback retains the schema in its instructions. If mining still fails
-to generate JSON (or the completion is truncated), its transcript window is split
-at segment boundaries, up to four levels. Both halves are processed and merged;
-the output budget and provider stay unchanged. Logs include finish reason and
-provider token usage when a completion is returned.
+Mining now has two stages. Extraction uses an 800-token output cap and only five
+fields per atom: title, start_seconds, end_seconds, idea, type. At most six atoms
+are accepted per text window (up to two minutes, at most 15 seconds overlap).
+Enrichment scores/classifies one atom per request; its excerpt is drawn locally
+from the existing transcript. `GROQ_MINING_MAX_TOKENS` now caps enrichment only.
 
-All four stages (mining, teaser, Threads, Reels) use strict schemas with
-`openai/gpt-oss-120b`, even if the legacy `GROQ_USE_JSON_SCHEMA` is false.
-No new environment variables are needed; redeploy to activate the migration.
+A generation failure waits at least 60 seconds (longer if provider reset/retry
+headers demand it), retries the same text once, then splits that text once into
+two segment-aligned halves. Each half is attempted once; there is no recursive
+split cascade. This recovery never downloads or transcribes audio again.
+
+Every LLM HTTP attempt reserves estimated input plus the full output budget in a
+shared per-model 60-second rolling ledger, even if the request fails. Admission
+waits until the reservation fits. Provider remaining/reset headers add a further
+constraint. Logs show stage/window, attempt, input, output budget, rolling usage,
+and wait. Generation errors log original status/code/message/failed_generation,
+finish reason and rate-limit headers before wrapping (configured keys redacted).
+
+The ledger is in-process and shared across stages/jobs using the same client.
+Use one Render process/worker. Other API consumers or a restart can still cause
+429s; provider headers and bounded retries remain necessary. Estimates reserve
+capacity conservatively and are not billing records. The supplied logs show TPM
+usage after failed generations; they do not establish monetary billing for them.
+
+Extraction, enrichment, teaser, Threads and Reels use strict schemas with
+`openai/gpt-oss-120b`. No paid provider/tier is enabled. Redeploy to activate;
+`GROQ_EXTRACTION_MAX_TOKENS` is optional and defaults to 800 (range 700–900).

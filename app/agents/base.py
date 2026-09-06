@@ -172,12 +172,14 @@ class StructuredAgent:
         user: str,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        request_label: str | None = None,
+        repair_attempts: int = 2,
     ) -> ModelT:
         schema = json_schema_for(response_model)
         attempt_user = user
         last_error: Exception | None = None
 
-        for attempt in (1, 2):
+        for attempt in range(1, repair_attempts + 1):
             try:
                 payload = await self._llm.chat_json(
                     system=system,
@@ -186,7 +188,7 @@ class StructuredAgent:
                     schema_name=response_model.__name__,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    label=f"{self.name}#{attempt}",
+                    label=f"{request_label or self.name}#{attempt}",
                 )
             except GroqError:
                 raise  # quota/network problems are not repairable by re-prompting

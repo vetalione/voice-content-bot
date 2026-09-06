@@ -24,6 +24,7 @@ import httpx
 
 from app.config import Settings
 from app.services.token_budget import request_tokens
+from app.services.tpm import RollingTPM
 from app.utils.retry import RetryableError, retry_async
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ class GroqClient:
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
         self._settings = settings
         self._own_client = client is None
+        self._tpm: dict[str, RollingTPM] = {}
         self._client = client or httpx.AsyncClient(
             base_url=settings.groq_base_url,
             timeout=httpx.Timeout(settings.groq_timeout_seconds, connect=30.0),
@@ -134,7 +136,7 @@ class GroqClient:
                 raise GroqCompatibilityError(
                     f"{label}: structured output unavailable: {body}", response.status_code
                 )
-        if response.status_code == 400 and code == "json_validate_failed":
+        if response.status_code in {400, 422} and code == "json_validate_failed":
             raise GroqGenerationError(
                 f"{label}: Groq could not generate valid JSON within the request constraints",
                 status_code=400,
@@ -291,10 +293,67 @@ class GroqClient:
                 body["response_format"] = {"type": "json_object"}
             return body
 
+        scheduler = self._tpm.setdefault(target_model, RollingTPM(settings.groq_tpm_limit))
+        attempts = 0
+
         async def call(with_schema: bool) -> dict[str, Any]:
+            nonlocal attempts
+            attempts += 1
+            await scheduler.reserve(
+                input_estimate + output_budget,
+                label=label,
+                attempt=attempts,
+                input_tokens=input_estimate,
+                output=output_budget,
+            )
             response = await self._client.post("/chat/completions", json=payload(with_schema))
+            try:
+                original = response.json()
+            except ValueError:
+                original = {}
+            error = original.get("error", {}) if isinstance(original, dict) else {}
+            if not isinstance(error, dict):
+                error = {}
+            choices = original.get("choices", []) if isinstance(original, dict) else []
+            finish = (
+                choices[0].get("finish_reason")
+                if choices
+                else original.get("finish_reason")
+                if isinstance(original, dict)
+                else None
+            )
+            failed = error.get("code") == "json_validate_failed" or finish == "length"
+            scheduler.observe(response.headers, generation_failed=failed)
+            if failed:
+                scheduler.blocked_until = max(
+                    scheduler.blocked_until, scheduler.clock() + (self._retry_after(response) or 0)
+                )
+            if failed or (with_schema and response.status_code >= 400):
+                diagnostics = {
+                    "http_status": response.status_code,
+                    "error.code": error.get("code"),
+                    "error.message": error.get("message"),
+                    "failed_generation": error.get("failed_generation"),
+                    "finish_reason": finish,
+                    "usage": original.get("usage"),
+                    "headers": {
+                        k: v
+                        for k, v in response.headers.items()
+                        if k.startswith("x-ratelimit-") or k == "retry-after"
+                    },
+                }
+                safe = json.dumps(diagnostics, ensure_ascii=False)
+                for secret in (settings.groq_api_key, settings.bot_token, settings.webhook_secret):
+                    if secret:
+                        safe = safe.replace(secret, "[REDACTED]")
+                logger.error(
+                    "Groq original generation failure stage/window=%s attempt=%s %s",
+                    label,
+                    attempts,
+                    safe,
+                )
             self._raise_for_status(response, label)
-            return response.json()
+            return original
 
         try:
             raw = await self._with_retries(label, lambda: call(use_schema))

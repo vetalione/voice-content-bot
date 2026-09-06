@@ -193,6 +193,40 @@ class FakeLLM:
         if self.error is not None:
             raise self.error
         label = str(kwargs.get("label", ""))
+        if label.startswith("content_extraction"):
+            return {
+                "atoms": [
+                    {
+                        "title": a["label"],
+                        "start_seconds": a["start_seconds"],
+                        "end_seconds": a["end_seconds"],
+                        "idea": a["key_claim"],
+                        "type": "idea",
+                    }
+                    for a in self.responses["content_miner"]["atoms"]
+                ]
+            }
+        if label.startswith("content_enrichment"):
+            a = next(
+                (
+                    a
+                    for a in self.responses["content_miner"]["atoms"]
+                    if a["label"] in kwargs["user"]
+                ),
+                self.responses["content_miner"]["atoms"][0],
+            )
+            return {
+                k: a[k]
+                for k in (
+                    "categories",
+                    "business_score",
+                    "personal_score",
+                    "novelty_score",
+                    "confidence",
+                    "should_ignore",
+                    "ignore_reason",
+                )
+            }
         for key, payload in self.responses.items():
             if label.startswith(key):
                 return json.loads(json.dumps(payload))
@@ -470,3 +504,21 @@ def transcript() -> Transcript:
         language="ru",
         duration=90.0,
     )
+
+
+@pytest.fixture(autouse=True)
+def virtual_tpm_clock(monkeypatch):
+    """Admission tests and the full suite never spend real minutes sleeping."""
+    from app.services.tpm import RollingTPM
+
+    original = RollingTPM.__init__
+    now = [0.0]
+
+    async def sleep(delay):
+        now[0] += delay
+
+    def init(self, limit, *, clock=None, sleep=None):
+        original(self, limit, clock=clock or (lambda: now[0]), sleep=sleep or virtual_sleep)
+
+    virtual_sleep = sleep
+    monkeypatch.setattr(RollingTPM, "__init__", init)
