@@ -63,10 +63,10 @@ async def test_oversized_atoms_split_and_results_ranked(settings, editor, budget
         seen.extend(ids)
         assert call["max_tokens"] == budget
         assert request_tokens(call["system"], call["user"], call["schema"]) + budget <= 8000
-    assert sorted(seen) == sorted(a.id for a in atoms)
-    assert len(calls) > 4
-    assert [c.atom_id for c in result.candidates] == ["a6", "a5", "a4", "a3", "a2"]
-    assert result.candidates[0].start_seconds == 360
+    assert sorted(seen) == sorted(a.id for a in atoms[:4])
+    assert len(calls) == 4
+    assert [c.atom_id for c in result.candidates] == ["a3", "a2", "a1", "a0"]
+    assert result.candidates[0].start_seconds == 180
 
 
 async def test_structurally_oversized_request_never_sent(settings):

@@ -8,7 +8,7 @@ from tests.test_pipeline import build_pipeline
 
 
 @pytest.mark.parametrize(
-    "stage", ["content_enrichment", "channel_teaser", "threads_editor", "reels_editor"]
+    "stage", ["channel_teaser", "threads_editor", "reels_editor"]
 )
 async def test_generation_failure_retries_only_failed_stage(settings, stage):
     class FailsOnce(FakeLLM):
@@ -37,12 +37,12 @@ async def test_generation_failure_retries_only_failed_stage(settings, stage):
     assert len(stt.calls) == 1
 
 
-async def test_enrichment_retries_are_bounded(settings):
+async def test_editor_retries_are_bounded(settings):
     class Broken(FakeLLM):
         attempts = 0
 
         async def chat_json(self, **kwargs):
-            if kwargs["label"].startswith("content_enrichment"):
+            if kwargs["label"].startswith("threads_editor"):
                 self.attempts += 1
                 raise GroqGenerationError("json_validate_failed")
             return await super().chat_json(**kwargs)

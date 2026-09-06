@@ -128,10 +128,10 @@ def test_minimal_schema_and_atom_cap():
     assert atom["additionalProperties"] is False
     seed = {"title": "t", "start_seconds": 0, "end_seconds": 1, "idea": "i", "type": "idea"}
     with pytest.raises(ValidationError):
-        AtomExtraction.model_validate({"atoms": [seed] * 7})
+        AtomExtraction.model_validate({"atoms": [seed] * 9})
 
 
-async def test_enrichment_one_atom_at_a_time(settings, transcript):
+async def test_no_per_atom_enrichment(settings, transcript):
     llm = FakeLLM()
     result = await ContentMinerAgent(llm, PromptLibrary(settings.prompts_dir), settings).mine(
         transcript
@@ -139,7 +139,8 @@ async def test_enrichment_one_atom_at_a_time(settings, transcript):
     extraction = [c for c in llm.calls if c["label"].startswith("content_extraction")]
     enrichment = [c for c in llm.calls if c["label"].startswith("content_enrichment")]
     assert extraction and all(c["max_tokens"] == 1500 for c in extraction)
-    assert len(enrichment) == len(result.atoms) == 2
+    assert len(enrichment) == 0
+    assert len(result.atoms) == 2
     assert all("Source excerpt:" in c["user"] for c in enrichment)
     assert all("TRANSCRIPT WINDOW" not in c["user"] for c in enrichment)
 

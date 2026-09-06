@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -74,6 +75,20 @@ class Settings(BaseSettings):
         description="Public https base url of the service, used by the webhook script.",
     )
 
+    transcription_provider: Literal["groq"] = "groq"
+    text_provider: Literal["openrouter", "groq"] = "openrouter"
+    openrouter_api_key: str = ""
+    openrouter_model: str = "openrouter/free"
+    openrouter_allow_paid: bool = False
+    openrouter_timeout_seconds: float = Field(default=120, gt=0)
+    openrouter_max_retries: int = Field(default=2, ge=0, le=3)
+    openrouter_max_requests_per_recording: int = Field(default=30, ge=1, le=100)
+    text_max_input_tokens: int = Field(default=12000, ge=1000)
+    text_extraction_max_tokens: int = Field(default=3000, gt=0)
+    text_teaser_max_tokens: int = Field(default=800, gt=0)
+    text_threads_max_tokens: int = Field(default=2000, gt=0)
+    text_reels_max_tokens: int = Field(default=3000, gt=0)
+
     # -------------------------------------------------------------------- Groq
     groq_api_key: str = Field(default="")
     groq_base_url: str = Field(default="https://api.groq.com/openai/v1")
@@ -122,13 +137,13 @@ class Settings(BaseSettings):
 
     # ----------------------------------------------------------------- Content
     miner_window_minutes: float = Field(
-        default=20.0,
+        default=12.0,
         gt=0,
         description="Transcript is mined window by window so long audio stays deep.",
     )
-    miner_window_overlap_minutes: float = Field(default=1.0, ge=0)
-    max_threads_candidates: int = Field(default=5, ge=1, le=20)
-    max_reels_candidates: int = Field(default=5, ge=1, le=20)
+    miner_window_overlap_minutes: float = Field(default=0.5, ge=0)
+    max_threads_candidates: int = Field(default=4, ge=1, le=5)
+    max_reels_candidates: int = Field(default=4, ge=1, le=5)
     min_atom_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     teaser_include_timestamps: bool = Field(default=True)
     teaser_reply_to_source: bool = Field(default=True)
@@ -198,6 +213,10 @@ class Settings(BaseSettings):
             missing.append("BOT_TOKEN")
         if not self.groq_api_key or _is_placeholder(self.groq_api_key):
             missing.append("GROQ_API_KEY")
+        if self.text_provider == "openrouter" and (
+            not self.openrouter_api_key or _is_placeholder(self.openrouter_api_key)
+        ):
+            missing.append("OPENROUTER_API_KEY")
         if not self.owner_telegram_id:
             missing.append("OWNER_TELEGRAM_ID")
         if not self.allowed_channel_id:

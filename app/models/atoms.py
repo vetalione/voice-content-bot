@@ -147,7 +147,7 @@ class ExtractedAtom(BaseModel):
 
 
 class AtomExtraction(BaseModel):
-    atoms: list[ExtractedAtom] = Field(max_length=6)
+    atoms: list[ExtractedAtom] = Field(max_length=8)
 
 
 class AtomEnrichment(BaseModel):

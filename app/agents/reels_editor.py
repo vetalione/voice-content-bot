@@ -53,14 +53,18 @@ class ReelsEditorAgent(StructuredAgent):
         if not atoms:
             return ReelsBatch()
 
-        ranked = rank_for_reels(atoms)
+        ranked = rank_for_reels(atoms)[: self.settings.max_reels_candidates]
         limit = self.settings.max_reels_candidates
         batch = await self.request_atom_batches(
             ReelsBatch,
             ranked,
             batch_size=self.settings.reels_batch_size,
             limit=limit,
-            max_tokens=self.settings.groq_reels_max_tokens,
+            max_tokens=(
+                self.settings.groq_reels_max_tokens
+                if self.settings.text_provider == "groq"
+                else self.settings.text_reels_max_tokens
+            ),
             temperature=0.85,
             placeholder="max_reels",
         )

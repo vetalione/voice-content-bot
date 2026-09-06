@@ -23,6 +23,7 @@ from app.models.transcript import ChunkTranscript, Transcript
 from app.services.audio import AudioProcessor
 from app.services.transcript_merge import merge_chunk_transcripts
 from app.services.transcription import Transcriber
+from app.services.usage import recording_usage
 from app.telegram.delivery import DeliveryGateway
 from app.telegram.downloader import FileDownloader
 from app.utils.tempfiles import workspace
@@ -167,6 +168,10 @@ class ContentPipeline:
 
     # -------------------------------------------------------------------- entry
     async def run(self, request: JobRequest) -> PipelineResult:
+        with recording_usage(request.media.duration_seconds or 0, request.dedupe_key):
+            return await self._run(request)
+
+    async def _run(self, request: JobRequest) -> PipelineResult:
         """Full flow for one recording. Temp files are always cleaned up."""
         started = time.monotonic()
         settings = self._settings

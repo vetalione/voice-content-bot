@@ -1,7 +1,8 @@
-"""Two-stage mining: minimal extraction, then single-atom enrichment.
+"""Minimal extraction, local source attachment and global deduplication.
 
-Text windows are capped at two minutes with at most 15 seconds of overlap.
-Generation recovery retries once, then halves text once; it never redoes STT.
+Text windows default to 12 minutes with 30 seconds of overlap.
+OpenRouter recovery is bounded; only the legacy Groq path halves text after retries.
+Neither text path redoes STT.
 """
 
 from __future__ import annotations
@@ -9,9 +10,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from app.models.atoms import AtomEnrichment, AtomExtraction, ContentAtom, ContentAtomSet
+from app.models.atoms import AtomCategory, AtomExtraction, ContentAtom, ContentAtomSet
 from app.models.transcript import Transcript, TranscriptSegment
-from app.services.groq_client import GroqGenerationError
+from app.services.llm import LLMGenerationError
+from app.services.token_budget import approximate_tokens
 from app.utils.text import token_overlap_ratio
 from app.utils.timecode import format_timecode
 
@@ -67,7 +69,7 @@ def build_windows(
 
 
 def deduplicate_atoms(atoms: list[ContentAtom]) -> list[ContentAtom]:
-    """Drop atoms that restate an atom already kept from an overlapping window."""
+    """Drop repeated ideas globally, including repetitions far apart in time."""
 
     def weight(atom: ContentAtom) -> float:
         return (
@@ -80,11 +82,6 @@ def deduplicate_atoms(atoms: list[ContentAtom]) -> list[ContentAtom]:
         fingerprint = f"{atom.label} {atom.key_claim} {atom.description}"
         duplicate = False
         for existing in kept:
-            time_overlap = min(atom.end_seconds, existing.end_seconds) - max(
-                atom.start_seconds, existing.start_seconds
-            )
-            if time_overlap <= 0:
-                continue
             other = f"{existing.label} {existing.key_claim} {existing.description}"
             if token_overlap_ratio(fingerprint, other) >= _DUPLICATE_ATOM_RATIO:
                 duplicate = True
@@ -102,9 +99,32 @@ class ContentMinerAgent(StructuredAgent):
         settings = self.settings
         windows = build_windows(
             transcript,
-            window_seconds=min(settings.miner_window_minutes * 60, 120),
-            overlap_seconds=min(settings.miner_window_overlap_minutes * 60, 15),
+            window_seconds=settings.miner_window_minutes * 60,
+            overlap_seconds=settings.miner_window_overlap_minutes * 60,
         )
+        sized = []
+        for window in windows:
+            group = []
+            used = 0
+            cap = (
+                self.settings.text_max_input_tokens - 1000
+                if settings.text_provider == "openrouter"
+                else max(1000, settings.groq_tpm_limit - settings.groq_extraction_max_tokens - 1000)
+            )
+            for segment in window.segments:
+                cost = approximate_tokens(segment.text) + 12
+                if group and used + cost > cap:
+                    sized.append(TranscriptWindow(len(sized), group[0].start, group[-1].end, group))
+                    group, used = [], 0
+                group.append(segment)
+                used += cost
+            if group:
+                sized.append(
+                    TranscriptWindow(
+                        len(sized), window.start if not sized else group[0].start, window.end, group
+                    )
+                )
+        windows = sized
         if not windows:
             logger.warning("Nothing to mine: empty transcript")
             return ContentAtomSet()
@@ -132,16 +152,24 @@ class ContentMinerAgent(StructuredAgent):
                 excerpt = " ".join(
                     seg.text for seg in window.segments if seg.end > start and seg.start <= end
                 )[:1200]
-                metadata = await self.request(
-                    AtomEnrichment,
-                    system=self.prompts.render(
-                        "content_enrichment.md",
-                        voice_style=self.prompts.voice_style("content_miner"),
-                    ),
-                    user=f"Title: {seed.title}\nIdea: {seed.idea}\nType: {seed.type}\nSource excerpt: {excerpt}",
-                    max_tokens=self.settings.groq_mining_max_tokens,
-                    request_label=f"content_enrichment/window={window.index + 1}/atom={position + 1}",
-                )
+                # Type-based local selection features, not an extra LLM call.
+                kind = seed.type.lower()
+                aliases = {
+                    "idea": "original_idea",
+                    "story": "personal_story",
+                    "observation": "business_insight",
+                }
+                try:
+                    category = AtomCategory(aliases.get(kind, kind))
+                except ValueError:
+                    category = AtomCategory.OTHER
+                metadata = {
+                    "categories": [category],
+                    "confidence": 0.9 if excerpt else 0.0,
+                    "novelty_score": 5.0,
+                    "business_score": 0.0,
+                    "personal_score": 0.0,
+                }
                 enriched.append(
                     ContentAtom(
                         id=f"a{position + 1}",
@@ -151,7 +179,7 @@ class ContentMinerAgent(StructuredAgent):
                         supporting_context=excerpt,
                         start_seconds=start,
                         end_seconds=end,
-                        **metadata.model_dump(),
+                        **metadata,
                     )
                 )
             result = ContentAtomSet(atoms=enriched)
@@ -180,7 +208,12 @@ class ContentMinerAgent(StructuredAgent):
             AtomExtraction,
             system=system,
             user=user,
-            max_tokens=output_budget or self.settings.groq_extraction_max_tokens,
+            max_tokens=output_budget
+            or (
+                self.settings.groq_extraction_max_tokens
+                if self.settings.text_provider == "groq"
+                else self.settings.text_extraction_max_tokens
+            ),
             request_label=f"content_extraction/window={window.index + 1}:{window.label}/attempt={attempt}",
             repair_attempts=1,
         )
@@ -190,20 +223,30 @@ class ContentMinerAgent(StructuredAgent):
         return result
 
     async def _mine_window(self, window, system, user):
+        if self.settings.text_provider == "openrouter":
+            # One local repair is bounded; quota failures never split into a cascade.
+            result = await self.request(
+                AtomExtraction,
+                system=system,
+                user=user,
+                max_tokens=self.settings.text_extraction_max_tokens,
+                request_label=f"content_extraction/window={window.index + 1}",
+            )
+            return result.atoms
         # The shared client's scheduler retains failed reservations and applies a
         # cooldown before each subsequent attempt. No audio/STT work occurs here.
         for attempt in (1, 2):
             try:
                 budget = self.settings.groq_extraction_max_tokens if attempt == 1 else 1600
                 return (await self._extract(window, system, user, attempt, budget)).atoms
-            except GroqGenerationError:
+            except LLMGenerationError:
                 if attempt == 1:
                     logger.warning(
                         "Extraction window %s failed; retry same text once with output_budget=1600 through TPM scheduler",
                         window.label,
                     )
         if len(window.segments) < 2:
-            raise GroqGenerationError("Extraction failed twice; text window cannot be reduced")
+            raise LLMGenerationError("Extraction failed twice; text window cannot be reduced")
         mid = len(window.segments) // 2
         atoms = []
         logger.warning("Extraction window %s failed twice; reduce TEXT window once", window.label)
@@ -213,5 +256,5 @@ class ContentMinerAgent(StructuredAgent):
                 part, system, f"TRANSCRIPT WINDOW:\n{part.text}", f"reduced-{index}"
             )
             atoms.extend(result.atoms)
-        # Each reduced window separately observes the six-atom limit.
+        # Each reduced window separately observes the eight-atom limit.
         return atoms

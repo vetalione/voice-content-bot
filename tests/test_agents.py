@@ -112,14 +112,14 @@ def test_distinct_atoms_are_all_kept():
     assert len(kept) == 2
 
 
-def test_atoms_at_different_times_are_never_merged():
+def test_repeated_ideas_at_different_times_are_globally_merged():
     kept = deduplicate_atoms(
         [
             atom(id="a1", start_seconds=0, end_seconds=60),
             atom(id="a2", start_seconds=600, end_seconds=660),
         ]
     )
-    assert len(kept) == 2
+    assert len(kept) == 1
 
 
 # ------------------------------------------------------------------ ranking ---

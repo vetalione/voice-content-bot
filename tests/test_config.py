@@ -8,6 +8,7 @@ from tests.conftest import FAKE_TOKEN
 
 def make(**overrides) -> Settings:
     base = {
+        "text_provider": "groq",
         "bot_token": FAKE_TOKEN,
         "groq_api_key": "gsk_real_key",
         "owner_telegram_id": 1,

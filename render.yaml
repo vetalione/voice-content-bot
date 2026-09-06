@@ -18,6 +18,8 @@ services:
         sync: false
       - key: GROQ_API_KEY
         sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
       - key: ALLOWED_CHANNEL_ID
         sync: false
       - key: OWNER_TELEGRAM_ID
@@ -31,8 +33,18 @@ services:
         value: "3.12"
       - key: GROQ_WHISPER_MODEL
         value: whisper-large-v3
-      - key: GROQ_LLM_MODEL
-        value: openai/gpt-oss-120b
+      - key: TRANSCRIPTION_PROVIDER
+        value: groq
+      - key: TEXT_PROVIDER
+        value: openrouter
+      - key: OPENROUTER_MODEL
+        value: openrouter/free
+      - key: OPENROUTER_ALLOW_PAID
+        value: "false"
+      - key: MAX_THREADS_CANDIDATES
+        value: "4"
+      - key: MAX_REELS_CANDIDATES
+        value: "4"
       - key: TRANSCRIPT_LANGUAGE
         value: ru
       - key: WEBHOOK_PATH
@@ -46,7 +58,9 @@ services:
       - key: MAX_AUDIO_DURATION_MINUTES
         value: "75"
       - key: MINER_WINDOW_MINUTES
-        value: "20"
+        value: "12"
+      - key: MINER_WINDOW_OVERLAP_MINUTES
+        value: "0.5"
       - key: ENABLE_FULL_TRANSCRIPT
         value: "false"
       - key: LOG_LEVEL

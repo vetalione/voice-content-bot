@@ -50,7 +50,11 @@ class ChannelTeaserAgent(StructuredAgent):
             system=system,
             user=user,
             temperature=0.75,
-            max_tokens=self.settings.groq_teaser_max_tokens,
+            max_tokens=(
+                self.settings.groq_teaser_max_tokens
+                if self.settings.text_provider == "groq"
+                else self.settings.text_teaser_max_tokens
+            ),
         )
         if not timestamps_allowed:
             teaser.timestamps = []

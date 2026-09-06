@@ -176,8 +176,7 @@ async def test_temp_workspace_is_cleaned_up(settings):
 
 async def test_low_confidence_atoms_produce_a_warning(settings):
     llm = FakeLLM()
-    llm.responses["content_miner"]["atoms"][0]["confidence"] = 0.1
-    llm.responses["content_miner"]["atoms"][1]["confidence"] = 0.1
+    settings = settings.model_copy(update={"min_atom_confidence": 0.99})
     pipeline, _, _ = build_pipeline(settings, llm=llm)
 
     result = await pipeline.run(make_job_request(SourceMode.PRIVATE))

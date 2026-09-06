@@ -23,6 +23,7 @@ from typing import Any
 import httpx
 
 from app.config import Settings
+from app.services.llm import LLMError, LLMGenerationError
 from app.services.token_budget import request_tokens
 from app.services.tpm import RollingTPM
 from app.utils.retry import RetryableError, retry_async
@@ -30,7 +31,7 @@ from app.utils.retry import RetryableError, retry_async
 logger = logging.getLogger(__name__)
 
 
-class GroqError(RuntimeError):
+class GroqError(LLMError):
     """Any non-recoverable Groq failure."""
 
     def __init__(self, message: str, status_code: int | None = None) -> None:
@@ -46,7 +47,7 @@ class GroqCompatibilityError(GroqError):
     """Provider explicitly reports structured output unavailable for this model."""
 
 
-class GroqGenerationError(GroqError):
+class GroqGenerationError(GroqError, LLMGenerationError):
     """The model could not finish a valid structured response."""
 
 

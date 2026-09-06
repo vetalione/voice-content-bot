@@ -39,14 +39,18 @@ class ThreadsEditorAgent(StructuredAgent):
         if not atoms:
             return ThreadsBatch()
 
-        ranked = rank_for_threads(atoms)
+        ranked = rank_for_threads(atoms)[: self.settings.max_threads_candidates]
         limit = self.settings.max_threads_candidates
         batch = await self.request_atom_batches(
             ThreadsBatch,
             ranked,
             batch_size=self.settings.threads_batch_size,
             limit=limit,
-            max_tokens=self.settings.groq_threads_max_tokens,
+            max_tokens=(
+                self.settings.groq_threads_max_tokens
+                if self.settings.text_provider == "groq"
+                else self.settings.text_threads_max_tokens
+            ),
             temperature=0.8,
             placeholder="max_posts",
         )

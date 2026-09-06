@@ -2,7 +2,7 @@
 
 Each agent is a thin object that:
   1. renders an editable markdown prompt from ``prompts/``,
-  2. asks Groq for a JSON object constrained by the target Pydantic schema,
+  2. asks the selected text provider for a JSON object constrained by the target Pydantic schema,
   3. validates the result, retrying once with the validation error attached.
 
 No agent parses free text with regex; the contract between stages is always a
@@ -13,35 +13,18 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Protocol, TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
 from app.config import Settings
-from app.services.groq_client import GroqError, GroqGenerationError
+from app.services.llm import LLMClient, LLMError, LLMGenerationError
 from app.services.prompts import PromptLibrary
 from app.services.token_budget import request_tokens
 
 logger = logging.getLogger(__name__)
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
-
-
-class LLMClient(Protocol):
-    """The single Groq capability the agents need (fakeable in tests)."""
-
-    async def chat_json(
-        self,
-        *,
-        system: str,
-        user: str,
-        model: str | None = ...,
-        schema: dict[str, Any] | None = ...,
-        schema_name: str = ...,
-        temperature: float | None = ...,
-        max_tokens: int | None = ...,
-        label: str = ...,
-    ) -> dict[str, Any]: ...
 
 
 class AgentError(RuntimeError):
@@ -138,10 +121,14 @@ class StructuredAgent:
             system = self.system_prompt(**{placeholder: min(limit, len(batch))})
             user = render_atoms(batch)
             estimate = request_tokens(system, user, json_schema_for(response_model))
-            if estimate + max_tokens > self.settings.groq_tpm_limit:
+            if (
+                estimate + max_tokens > self.settings.groq_tpm_limit
+                if self.settings.text_provider == "groq"
+                else estimate > self.settings.text_max_input_tokens
+            ):
                 if len(batch) == 1:
-                    raise GroqError(
-                        f"{self.name}: single atom exceeds TPM budget; shorten its context or prompt"
+                    raise LLMError(
+                        f"{self.name}: single atom exceeds request budget; shorten its context or prompt"
                     )
                 mid = len(batch) // 2
                 return await generate(batch[:mid]) + await generate(batch[mid:])
@@ -190,16 +177,22 @@ class StructuredAgent:
                     max_tokens=max_tokens,
                     label=f"{request_label or self.name}#{attempt}",
                 )
-            except GroqGenerationError:
+            except LLMGenerationError:
                 if attempt >= repair_attempts:
                     raise
                 logger.warning(
-                    "%s: structured generation failed on attempt %s; retry through TPM scheduler",
+                    "%s: structured generation failed on attempt %s; bounded repair via configured provider",
                     request_label or self.name,
                     attempt,
                 )
+                if self.settings.text_provider == "openrouter":
+                    attempt_user = (
+                        f"{user}\n\nThe previous response was invalid or truncated. "
+                        "Return one complete JSON object matching the required schema. "
+                        "Keep text concise and use fewer items if necessary to fit the output budget."
+                    )
                 continue
-            except GroqError:
+            except LLMError:
                 raise  # quota/network problems are not repairable by re-prompting
             try:
                 return response_model.model_validate(payload)

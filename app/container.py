@@ -21,6 +21,8 @@ from app.services.audio import AudioProcessor
 from app.services.dedupe import DedupeStore, TTLDedupeStore
 from app.services.groq_client import GroqClient
 from app.services.jobs import JobRunner
+from app.services.llm import LLMClient
+from app.services.openrouter_client import OpenRouterClient
 from app.services.pipeline import ContentPipeline
 from app.services.processor import RecordingProcessor
 from app.services.prompts import PromptLibrary
@@ -40,6 +42,7 @@ class Container:
     runner: JobRunner
     dedupe: DedupeStore
     groq: GroqClient
+    text: LLMClient
     audio: AudioProcessor
     pipeline: ContentPipeline
     processor: RecordingProcessor
@@ -51,6 +54,8 @@ class Container:
 
     async def shutdown(self) -> None:
         await self.runner.stop()
+        if self.text is not self.groq:
+            await self.text.aclose()
         await self.groq.aclose()
         await self.bot.session.close()
 
@@ -65,6 +70,7 @@ def build_container(settings: Settings) -> Container:
     bot = build_bot(settings)
     delivery = TelegramDelivery(bot, settings)
     groq = GroqClient(settings)
+    text = OpenRouterClient(settings) if settings.text_provider == "openrouter" else groq
     prompts = PromptLibrary(settings.prompts_dir)
     audio = AudioProcessor(settings)
 
@@ -73,10 +79,10 @@ def build_container(settings: Settings) -> Container:
         downloader=TelegramFileDownloader(bot, settings),
         audio=audio,
         transcriber=GroqTranscriber(groq, settings),
-        miner=ContentMinerAgent(groq, prompts, settings),
-        teaser_agent=ChannelTeaserAgent(groq, prompts, settings),
-        threads_agent=ThreadsEditorAgent(groq, prompts, settings),
-        reels_agent=ReelsEditorAgent(groq, prompts, settings),
+        miner=ContentMinerAgent(text, prompts, settings),
+        teaser_agent=ChannelTeaserAgent(text, prompts, settings),
+        threads_agent=ThreadsEditorAgent(text, prompts, settings),
+        reels_agent=ReelsEditorAgent(text, prompts, settings),
         delivery=delivery,
     )
 
@@ -105,6 +111,7 @@ def build_container(settings: Settings) -> Container:
         runner=runner,
         dedupe=dedupe,
         groq=groq,
+        text=text,
         audio=audio,
         pipeline=pipeline,
         processor=processor,
