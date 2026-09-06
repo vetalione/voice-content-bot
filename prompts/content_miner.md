@@ -63,6 +63,13 @@ Pick one or more from exactly this list:
 `failure`, `relationship_observation`, `travel_incident`, `lesson`,
 `culture_observation`, `provocative_question`, `other`
 
+## Response size
+
+The output budget is small. Keep each atom compact: a short label and claim,
+one brief description, and only the relevant source quote (one or two sentences).
+Omit optional fields when empty. Do not repeat the same text in multiple fields.
+Use concise notes and finish the JSON object within the available output budget.
+
 ## Output
 
 Return **JSON only**, no markdown fences, no commentary:

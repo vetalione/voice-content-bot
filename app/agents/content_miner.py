@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from app.models.atoms import ContentAtom, ContentAtomSet
 from app.models.transcript import Transcript, TranscriptSegment
+from app.services.groq_client import GroqGenerationError
 from app.utils.text import token_overlap_ratio
 from app.utils.timecode import format_timecode
 
@@ -126,9 +127,7 @@ class ContentMinerAgent(StructuredAgent):
                 "TRANSCRIPT WINDOW:\n"
                 f"{window.text}"
             )
-            result = await self.request(
-                ContentAtomSet, system=system, user=user, max_tokens=settings.groq_mining_max_tokens
-            )
+            result = await self._mine_window(window, system, user)
             for position, atom in enumerate(result.atoms):
                 atom.id = f"w{window.index + 1}a{position + 1}"
                 # Clamp hallucinated timestamps back into this window.
@@ -148,3 +147,43 @@ class ContentMinerAgent(StructuredAgent):
             len(collected),
         )
         return ContentAtomSet(atoms=deduped, notes="\n".join(notes)[:2000])
+
+    async def _mine_window(self, window, system, user, depth=0):
+        try:
+            result = await self.request(
+                ContentAtomSet,
+                system=system,
+                user=user,
+                max_tokens=self.settings.groq_mining_max_tokens,
+            )
+            for atom in result.atoms:
+                atom.start_seconds = min(max(atom.start_seconds, window.start), window.end)
+                atom.end_seconds = min(max(atom.end_seconds, atom.start_seconds), window.end)
+            return result
+        except GroqGenerationError:
+            if depth >= 4 or len(window.segments) < 2:
+                raise
+            mid = len(window.segments) // 2
+            results = []
+            logger.warning(
+                "Mining JSON generation failed; splitting window %s (depth=%s)",
+                window.label,
+                depth + 1,
+            )
+            for segments in (window.segments[:mid], window.segments[mid:]):
+                part = TranscriptWindow(
+                    index=window.index,
+                    start=segments[0].start,
+                    end=segments[-1].end,
+                    segments=segments,
+                )
+                part_user = (
+                    "Extract compact atoms from this smaller transcript window. "
+                    "Timestamps are absolute seconds in the original recording.\n"
+                    f"TRANSCRIPT WINDOW:\n{part.text}"
+                )
+                results.append(await self._mine_window(part, system, part_user, depth + 1))
+            return ContentAtomSet(
+                atoms=[a for result in results for a in result.atoms],
+                notes="\n".join(result.notes for result in results)[:2000],
+            )

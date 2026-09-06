@@ -454,3 +454,10 @@ Style guidance excludes comments, placeholders and examples belonging to another
 editor. The miner receives only publication exclusions. Teasers use up to six
 atoms, without resending the transcript opening. Large custom prompts can still
 exceed the budget; shorten them if the local size guard reports an error.
+
+GPT-OSS requests use `reasoning_effort=low` to preserve the small response budget.
+JSON-mode fallback retains the schema in its instructions. If mining still fails
+to generate JSON (or the completion is truncated), its transcript window is split
+at segment boundaries, up to four levels. Both halves are processed and merged;
+the output budget and provider stay unchanged. Logs include finish reason and
+provider token usage when a completion is returned.

@@ -37,6 +37,10 @@ class GroqError(RuntimeError):
         self.status_code = status_code
 
 
+class GroqGenerationError(GroqError):
+    """The model could not finish a valid structured response."""
+
+
 class GroqQuotaError(GroqError):
     """Rate limit or quota exhausted after all bounded retries."""
 
@@ -75,6 +79,15 @@ class GroqClient:
         if response.status_code < 400:
             return
         body = response.text[:800]
+        try:
+            code = response.json().get("error", {}).get("code")
+        except (ValueError, AttributeError):
+            code = None
+        if response.status_code == 400 and code == "json_validate_failed":
+            raise GroqGenerationError(
+                f"{label}: Groq could not generate valid JSON within the request constraints",
+                status_code=400,
+            )
         if response.status_code == 429:
             sizes = re.search(r"Limit\s+([\d,]+).*?Requested\s+([\d,]+)", body, re.I)
             if sizes and int(sizes[2].replace(",", "")) > int(sizes[1].replace(",", "")):
@@ -204,6 +217,14 @@ class GroqClient:
                 ),
                 "max_tokens": output_budget,
             }
+            if target_model in {"openai/gpt-oss-120b", "openai/gpt-oss-20b"}:
+                body["reasoning_effort"] = "low"
+            if not with_schema and schema:
+                # JSON mode guarantees syntax only; retain the output contract.
+                body["messages"][0]["content"] += (
+                    "\nReturn JSON matching this schema: "
+                    + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+                )
             if with_schema and schema:
                 body["response_format"] = {
                     "type": "json_schema",
@@ -239,14 +260,25 @@ class GroqClient:
     @staticmethod
     def _extract_json(raw: dict[str, Any], label: str) -> dict[str, Any]:
         try:
-            content = raw["choices"][0]["message"]["content"]
+            choice = raw["choices"][0]
+            logger.info(
+                "LLM %s finish_reason=%s usage=%s",
+                label,
+                choice.get("finish_reason"),
+                raw.get("usage", {}),
+            )
+            if choice.get("finish_reason") == "length":
+                raise GroqGenerationError(
+                    f"{label}: output token budget exhausted before JSON completed"
+                )
+            content = choice["message"]["content"]
         except (KeyError, IndexError, TypeError) as error:
             raise GroqError(f"{label}: unexpected Groq response shape: {raw}") from error
         if isinstance(content, list):  # some models return content parts
             content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
         text = (content or "").strip()
         if not text:
-            raise GroqError(f"{label}: Groq returned an empty completion")
+            raise GroqGenerationError(f"{label}: Groq returned an empty completion")
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError as error:
