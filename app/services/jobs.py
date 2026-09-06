@@ -102,6 +102,17 @@ class JobRunner:
             ) from error
         logger.info("Queued job %s (depth=%s)", name, self._queue.qsize())
 
+    async def _heartbeat(self, name: str, started: float) -> None:
+        while True:
+            await asyncio.sleep(30)
+            logger.info(
+                "Job heartbeat name=%s elapsed=%.1fs running=%s queued=%s",
+                name,
+                time.monotonic() - started,
+                self._stats.running,
+                self._queue.qsize(),
+            )
+
     async def _worker(self, index: int) -> None:
         while True:
             job = await self._queue.get()
@@ -116,6 +127,7 @@ class JobRunner:
                     job.name,
                     started - job.submitted_at,
                 )
+                heartbeat = asyncio.create_task(self._heartbeat(job.name, started))
                 try:
                     await job.run()
                     self._stats.completed += 1
@@ -132,6 +144,9 @@ class JobRunner:
                         except Exception:
                             logger.exception("Error handler for %s failed", job.name)
                 finally:
+                    heartbeat.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await heartbeat
                     self._stats.running -= 1
             finally:
                 self._queue.task_done()

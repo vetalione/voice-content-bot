@@ -71,11 +71,25 @@ class RollingTPM:
                     wait,
                 )
                 if wait > 0:
-                    await self.sleep(min(wait, 60.0))
+                    await self.sleep(min(wait, 10.0))
                     continue
-                self.events.append((self.clock(), tokens))
+                reservation = (self.clock(), tokens)
+                self.events.append(reservation)
                 if self.remote_until > now and self.remote_remaining is not None:
                     self.remote_remaining = max(0, self.remote_remaining - tokens)
+                return reservation
+
+    def settle(self, reservation, usage):
+        """Replace a successful reservation with reported usage; errors retain it."""
+        if not isinstance(usage, dict):
+            return
+        actual = usage.get("total_tokens")
+        if isinstance(actual, bool) or not isinstance(actual, int) or actual < 0:
+            return
+        for index, event in enumerate(self.events):
+            if event is reservation:
+                self.events[index] = (event[0], actual)
+                logger.info("TPM usage reconciled reserved=%s actual=%s", event[1], actual)
                 return
 
     def observe(self, headers, *, generation_failed=False):

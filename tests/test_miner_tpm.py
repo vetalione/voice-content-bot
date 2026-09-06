@@ -42,7 +42,7 @@ async def test_reservations_include_failed_calls_and_expire():
     await reserve(scheduler, 5000)
     # No success/usage response: the reservation must still count.
     await reserve(scheduler, 4000)
-    assert clock.waits == [60]
+    assert sum(clock.waits) == 60
     assert list(scheduler.events) == [(60, 4000)]
 
 
@@ -56,7 +56,8 @@ async def test_generation_cooldown_and_provider_headers():
     )
     await reserve(scheduler, 1000)
     assert clock.now == 70
-    assert clock.waits == [60, 10]
+    assert sum(clock.waits) == 70
+    assert max(clock.waits) <= 10
 
 
 async def test_concurrent_admission_cannot_overbook():
@@ -164,3 +165,27 @@ async def test_generation_recovery_does_not_call_whisper_again(settings):
 def test_header_duration_units():
     assert duration_seconds("1m2.5s") == 62.5
     assert duration_seconds("200ms") == 0.2
+
+
+async def test_successful_usage_avoids_reported_unnecessary_wait():
+    clock = Clock()
+    scheduler = RollingTPM(8000, clock=clock.clock, sleep=clock.sleep)
+    for reserved, actual in ((2318, 1502), (1821, 597), (1993, 633)):
+        reservation = await scheduler.reserve(
+            reserved, label="replay", attempt=1, input_tokens=reserved - 800, output=800
+        )
+        scheduler.settle(reservation, {"total_tokens": actual})
+    await reserve(scheduler, 1875)
+    assert clock.waits == []
+    assert sum(tokens for _, tokens in scheduler.events) == 2732 + 1875
+
+
+async def test_missing_usage_retains_full_reservation():
+    clock = Clock()
+    scheduler = RollingTPM(8000, clock=clock.clock, sleep=clock.sleep)
+    reservation = await scheduler.reserve(
+        5000, label="test", attempt=1, input_tokens=4200, output=800
+    )
+    scheduler.settle(reservation, {})
+    await reserve(scheduler, 4000)
+    assert clock.now == 60

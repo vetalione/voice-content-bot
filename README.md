@@ -475,7 +475,9 @@ two segment-aligned halves. Each half is attempted once; there is no recursive
 split cascade. This recovery never downloads or transcribes audio again.
 
 Every LLM HTTP attempt reserves estimated input plus the full output budget in a
-shared per-model 60-second rolling ledger, even if the request fails. Admission
+shared per-model 60-second rolling ledger. Successful responses replace that
+reservation with Groq total_tokens; failed requests or missing usage retain the
+full reservation. Admission
 waits until the reservation fits. Provider remaining/reset headers add a further
 constraint. Logs show stage/window, attempt, input, output budget, rolling usage,
 and wait. Generation errors log original status/code/message/failed_generation,
@@ -490,3 +492,9 @@ usage after failed generations; they do not establish monetary billing for them.
 Extraction, enrichment, teaser, Threads and Reels use strict schemas with
 `openai/gpt-oss-120b`. No paid provider/tier is enabled. Redeploy to activate;
 `GROQ_EXTRACTION_MAX_TOKENS` is optional and defaults to 800 (range 700–900).
+
+TPM waits log their remaining delay at most every 10 seconds while the process
+is running. Background jobs log a heartbeat every 30 seconds and cancel the
+heartbeat on completion/failure. A healthy `/health` with `running: 1` alone does
+not prove that a job is advancing; use these logs to distinguish an active wait
+from a stopped/restarted process or a stalled request.

@@ -299,7 +299,7 @@ class GroqClient:
         async def call(with_schema: bool) -> dict[str, Any]:
             nonlocal attempts
             attempts += 1
-            await scheduler.reserve(
+            reservation = await scheduler.reserve(
                 input_estimate + output_budget,
                 label=label,
                 attempt=attempts,
@@ -353,6 +353,14 @@ class GroqClient:
                     safe,
                 )
             self._raise_for_status(response, label)
+            if not failed:
+                scheduler.settle(reservation, original.get("usage"))
+            logger.info(
+                "LLM HTTP completed stage/window=%s attempt=%s status=%s",
+                label,
+                attempts,
+                response.status_code,
+            )
             return original
 
         try:
