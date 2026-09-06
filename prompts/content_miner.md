@@ -67,7 +67,7 @@ Pick one or more from exactly this list:
 
 The output budget is small. Keep each atom compact: a short label and claim,
 one brief description, and only the relevant source quote (one or two sentences).
-Omit optional fields when empty. Do not repeat the same text in multiple fields.
+Include every schema field; use empty strings or lists when there is no content. Do not repeat the same text in multiple fields.
 Use concise notes and finish the JSON object within the available output budget.
 
 ## Output

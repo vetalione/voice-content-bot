@@ -94,7 +94,7 @@ class Settings(BaseSettings):
     groq_retry_max_delay: float = Field(default=120.0, ge=0.0)
     groq_use_json_schema: bool = Field(
         default=True,
-        description="Try response_format=json_schema first, fall back to json_object.",
+        description="Enable strict schemas for other models; GPT-OSS 120B always uses strict schemas.",
     )
     transcript_language: str = Field(
         default="ru",

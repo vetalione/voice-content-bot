@@ -49,22 +49,52 @@ class AgentError(RuntimeError):
 
 
 def json_schema_for(model: type[BaseModel]) -> dict[str, Any]:
-    """A JSON schema Groq accepts (no ``$defs`` indirection at the root)."""
-    schema = model.model_json_schema(mode="serialization")
+    """Closed strict schema; Pydantic retains bounds as defense in depth.
 
-    def compact(value):
-        if isinstance(value, dict):
-            return {
-                k: compact(v)
-                for k, v in value.items()
-                if k not in {"title", "description", "default", "$schema"}
-            }
-        if isinstance(value, list):
-            return [compact(v) for v in value]
-        return value
+    Defaulted strings/lists remain required strings/lists (empty is meaningful).
+    Only explicitly nullable annotations accept null.
+    """
 
-    schema = compact(schema)
-    return schema
+    def convert(node):
+        result = {}
+        for key, value in node.items():
+            if key in {
+                "title",
+                "description",
+                "default",
+                "$schema",
+                "minimum",
+                "maximum",
+                "exclusiveMinimum",
+                "exclusiveMaximum",
+                "multipleOf",
+                "minLength",
+                "maxLength",
+                "pattern",
+                "format",
+                "minItems",
+                "maxItems",
+            }:
+                continue
+            if key in {"properties", "$defs"}:
+                result[key] = {name: convert(child) for name, child in value.items()}
+            elif key == "items":
+                result[key] = convert(value)
+            elif key == "anyOf":
+                result[key] = [convert(child) for child in value]
+            elif key in {"type", "$ref", "enum", "required", "additionalProperties"}:
+                result[key] = value
+            else:
+                raise ValueError(f"Unsupported strict JSON Schema keyword: {key}")
+        if result.get("type") == "object" or "properties" in result:
+            if isinstance(result.get("additionalProperties"), dict):
+                raise ValueError("Open mappings cannot be represented as strict objects")
+            result.setdefault("properties", {})
+            result["additionalProperties"] = False
+            result["required"] = list(result["properties"])
+        return result
+
+    return convert(model.model_json_schema(mode="serialization"))
 
 
 class StructuredAgent:

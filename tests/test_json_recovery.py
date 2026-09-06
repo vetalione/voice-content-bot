@@ -20,7 +20,13 @@ async def test_json_fallback_preserves_schema_and_low_reasoning(settings):
         calls.append(body)
         if len(calls) == 1:
             return httpx.Response(
-                400, json={"error": {"code": "json_validate_failed", "failed_generation": ""}}
+                400,
+                json={
+                    "error": {
+                        "code": "unsupported_response_format",
+                        "message": "json_schema is not supported by this model",
+                    }
+                },
             )
         return httpx.Response(
             200,

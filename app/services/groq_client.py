@@ -37,6 +37,14 @@ class GroqError(RuntimeError):
         self.status_code = status_code
 
 
+class GroqSchemaError(GroqError):
+    """Invalid schema configuration; never downgrade."""
+
+
+class GroqCompatibilityError(GroqError):
+    """Provider explicitly reports structured output unavailable for this model."""
+
+
 class GroqGenerationError(GroqError):
     """The model could not finish a valid structured response."""
 
@@ -83,6 +91,49 @@ class GroqClient:
             code = response.json().get("error", {}).get("code")
         except (ValueError, AttributeError):
             code = None
+        if response.status_code in {400, 404, 422}:
+            if code in {"invalid_json_schema", "invalid_schema", "schema_validation_error"}:
+                raise GroqSchemaError(
+                    f"{label}: invalid structured-output schema: {body}", response.status_code
+                )
+            try:
+                detail = response.json().get("error", {})
+                message = str(detail.get("message", "")).lower()
+                param = detail.get("param")
+            except (ValueError, AttributeError):
+                message, param = "", None
+            if (
+                isinstance(param, str) and param.startswith("response_format.json_schema.schema")
+            ) or any(
+                phrase in message
+                for phrase in (
+                    "invalid schema",
+                    "invalid json_schema",
+                    "schema keyword",
+                    "additionalproperties",
+                    "required properties",
+                )
+            ):
+                raise GroqSchemaError(
+                    f"{label}: invalid structured-output schema: {body}", response.status_code
+                )
+            # Require explicit feature/model incompatibility, not an arbitrary 4xx.
+            feature = "json_schema" in message or "structured output" in message
+            unavailable = (
+                "not supported" in message
+                or "does not support" in message
+                or "unavailable" in message
+            )
+            if (
+                code not in {"json_validate_failed"}
+                and feature
+                and unavailable
+                and "model" in message
+                and param in {None, "response_format", "response_format.type"}
+            ):
+                raise GroqCompatibilityError(
+                    f"{label}: structured output unavailable: {body}", response.status_code
+                )
         if response.status_code == 400 and code == "json_validate_failed":
             raise GroqGenerationError(
                 f"{label}: Groq could not generate valid JSON within the request constraints",
@@ -183,12 +234,14 @@ class GroqClient:
     ) -> dict[str, Any]:
         """Chat completion constrained to a JSON object.
 
-        Tries ``response_format=json_schema`` when enabled and falls back to
-        ``json_object`` if the model or endpoint rejects it.
+        Use strict schemas; JSON mode is only an explicit compatibility fallback.
+        GPT-OSS 120B always uses strict output when a schema is supplied.
         """
         settings = self._settings
         target_model = model or settings.groq_llm_model
-        use_schema = bool(schema) and settings.groq_use_json_schema
+        use_schema = bool(schema) and (
+            target_model == "openai/gpt-oss-120b" or settings.groq_use_json_schema
+        )
         output_budget = max_tokens if max_tokens is not None else settings.groq_llm_max_tokens
         input_estimate = request_tokens(system, user, schema)
         logger.info(
@@ -231,7 +284,7 @@ class GroqClient:
                     "json_schema": {
                         "name": schema_name,
                         "schema": schema,
-                        "strict": False,
+                        "strict": True,
                     },
                 }
             else:
@@ -245,11 +298,11 @@ class GroqClient:
 
         try:
             raw = await self._with_retries(label, lambda: call(use_schema))
-        except GroqError as error:
-            if not use_schema or error.status_code not in {400, 404, 422}:
+        except GroqCompatibilityError:
+            if not use_schema:
                 raise
             logger.warning(
-                "%s: json_schema rejected by %s, retrying with json_object",
+                "%s: structured output explicitly unavailable on %s; compatibility fallback to json_object",
                 label,
                 target_model,
             )

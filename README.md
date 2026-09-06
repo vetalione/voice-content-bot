@@ -374,8 +374,13 @@ message, never as a surprise invoice. Concretely:
   type and message, and publishes nothing.
 
 Structured output: agents request `response_format=json_schema` derived from the
-target Pydantic model, fall back to `json_object` if the model rejects the schema,
-recover JSON wrapped in prose or a markdown fence, and on a validation failure
+target Pydantic model with `strict: true`. All nested objects are closed and all
+properties required. Defaulted strings/lists keep their empty-value semantics;
+explicitly nullable types retain null unions. Length/numeric bounds are checked
+by Pydantic rather than sent as extra schema keywords. JSON Object Mode is only
+used after an explicit provider/model compatibility rejection; invalid schemas,
+generation errors and arbitrary 400/404/422 responses never trigger downgrade.
+The client can recover JSON wrapped in prose in compatibility mode, and on a validation failure
 re-prompt **once** with the Pydantic errors attached. No important model response
 is parsed with regex.
 
@@ -461,3 +466,7 @@ to generate JSON (or the completion is truncated), its transcript window is spli
 at segment boundaries, up to four levels. Both halves are processed and merged;
 the output budget and provider stay unchanged. Logs include finish reason and
 provider token usage when a completion is returned.
+
+All four stages (mining, teaser, Threads, Reels) use strict schemas with
+`openai/gpt-oss-120b`, even if the legacy `GROQ_USE_JSON_SCHEMA` is false.
+No new environment variables are needed; redeploy to activate the migration.

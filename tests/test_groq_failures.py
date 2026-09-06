@@ -156,7 +156,7 @@ async def test_json_schema_rejection_falls_back_to_json_object(settings):
         body = jsonlib.loads(request.content)
         seen.append(body["response_format"]["type"])
         if body["response_format"]["type"] == "json_schema":
-            return httpx.Response(400, json={"error": {"message": "unsupported"}})
+            return httpx.Response(400, json={"error": {"message": "json_schema is not supported by this model"}})
         return httpx.Response(200, json={"choices": [{"message": {"content": '{"ok": true}'}}]})
 
     client = make_client(settings, handler)
