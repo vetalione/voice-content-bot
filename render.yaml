@@ -1,0 +1,67 @@
+# Render Blueprint. Deploy with: Render dashboard -> New -> Blueprint.
+#
+# Docker runtime is used so `apt-get install ffmpeg` is available. The plain
+# Python runtime also works (imageio-ffmpeg ships a static binary) — see the
+# commented alternative at the bottom.
+services:
+  - type: web
+    name: voice-content-bot
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # --- secrets: set these in the Render dashboard, never in git ---
+      - key: BOT_TOKEN
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: ALLOWED_CHANNEL_ID
+        sync: false
+      - key: OWNER_TELEGRAM_ID
+        sync: false
+      - key: ALLOWED_USER_IDS
+        sync: false
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      # --- safe defaults ---
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: GROQ_WHISPER_MODEL
+        value: whisper-large-v3
+      - key: GROQ_LLM_MODEL
+        value: openai/gpt-oss-120b
+      - key: TRANSCRIPT_LANGUAGE
+        value: ru
+      - key: WEBHOOK_PATH
+        value: /telegram/webhook
+      - key: MAX_STT_UPLOAD_MB
+        value: "24"
+      - key: AUDIO_CHUNK_MINUTES
+        value: "10"
+      - key: AUDIO_CHUNK_OVERLAP_SECONDS
+        value: "5"
+      - key: MAX_AUDIO_DURATION_MINUTES
+        value: "75"
+      - key: MINER_WINDOW_MINUTES
+        value: "20"
+      - key: ENABLE_FULL_TRANSCRIPT
+        value: "false"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: JOB_CONCURRENCY
+        value: "1"
+      - key: WORK_DIR
+        value: /tmp/voice-content-bot
+
+# Alternative, non-Docker configuration (ffmpeg comes from imageio-ffmpeg):
+#
+#  - type: web
+#    name: voice-content-bot
+#    runtime: python
+#    plan: free
+#    buildCommand: pip install -r requirements.txt
+#    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+#    healthCheckPath: /health

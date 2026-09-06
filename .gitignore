@@ -1,0 +1,43 @@
+### Secrets — never commit
+.env
+.env.*
+*.pem
+*.key
+secrets/
+
+### Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+env/
+.python-version
+
+### Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+### Runtime scratch
+/tmp/
+work/
+tmp/
+*.log
+transcripts/
+*.oga
+*.ogg
+*.mp3
+*.m4a
+*.wav
+*.opus
+
+### Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,65 @@
+[project]
+name = "voice-content-bot"
+version = "1.0.0"
+description = "Telegram voice posts to channel teasers, Threads posts and Reels scripts"
+requires-python = ">=3.12"
+readme = "README.md"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "aiogram>=3.17",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+    "httpx>=0.28",
+    "imageio-ffmpeg>=0.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.25", "ruff>=0.9"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q --strict-markers"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["."]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # bugbear
+    "UP",   # pyupgrade
+    "C4",   # comprehensions
+    "SIM",  # simplify
+    "RUF",
+]
+ignore = [
+    "E501",   # line length is handled by the formatter
+    "B008",   # FastAPI Depends/Header defaults
+    "RUF001", # ambiguous unicode chars are intentional (Cyrillic + en dash)
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B018", "SIM117"]
+
+[tool.ruff.format]
+quote-style = "double"
