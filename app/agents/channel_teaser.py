@@ -43,7 +43,7 @@ class ChannelTeaserAgent(StructuredAgent):
             f"Recording duration: {format_timecode(transcript.duration)}.\n"
             f"Detected language: {transcript.language or 'unknown'}.\n\n"
             "CONTENT ATOMS FOUND IN THIS RECORDING:\n"
-            f"{render_atoms(atoms[:6])}"
+            f"{render_atoms(atoms if self.settings.semantic_pipeline_enabled else atoms[:6])}"
         )
         teaser = await self.request(
             ChannelTeaser,

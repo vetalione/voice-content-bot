@@ -15,15 +15,24 @@ from pathlib import Path
 from app.agents.channel_teaser import ChannelTeaserAgent
 from app.agents.content_miner import ContentMinerAgent
 from app.agents.reels_editor import ReelsEditorAgent
+from app.agents.semantic_miner import editorial_atoms
 from app.agents.threads_editor import ThreadsEditorAgent
 from app.config import Settings
 from app.models.content import PipelineResult
 from app.models.media import JobRequest, RecordingMetadata
+from app.models.semantic import SemanticResult
 from app.models.transcript import ChunkTranscript, Transcript
 from app.services.audio import AudioProcessor
+from app.services.checkpoints import (
+    active_checkpoint,
+    build_store,
+    checkpoint_scope,
+    fingerprint,
+    recording_id,
+)
 from app.services.transcript_merge import merge_chunk_transcripts
 from app.services.transcription import Transcriber
-from app.services.usage import recording_usage
+from app.services.usage import recording_usage, restore_usage
 from app.telegram.delivery import DeliveryGateway
 from app.telegram.downloader import FileDownloader
 from app.utils.tempfiles import workspace
@@ -49,6 +58,7 @@ class ContentPipeline:
         threads_agent: ThreadsEditorAgent,
         reels_agent: ReelsEditorAgent,
         delivery: DeliveryGateway,
+        checkpoint_store=None,
     ) -> None:
         self._settings = settings
         self._downloader = downloader
@@ -59,6 +69,7 @@ class ContentPipeline:
         self._threads_agent = threads_agent
         self._reels_agent = reels_agent
         self._delivery = delivery
+        self.checkpoints = checkpoint_store or build_store(settings)
 
     # ------------------------------------------------------------------- stages
     async def transcribe(
@@ -74,7 +85,26 @@ class ContentPipeline:
                 prepared.chunk_count,
                 chunk.offset_seconds,
             )
-            chunk_transcripts.append(await self._transcriber.transcribe_chunk(chunk))
+            scope = active_checkpoint.get()
+            key = "stt_chunk:" + fingerprint(
+                [
+                    chunk.index,
+                    chunk.offset_seconds,
+                    self._settings.groq_whisper_model,
+                    self._settings.transcript_language,
+                    self._settings.audio_chunk_minutes,
+                    self._settings.audio_chunk_overlap_seconds,
+                    self._settings.audio_target_codec,
+                ]
+            )
+            cached = await scope[0].get(scope[1], key) if scope else None
+            if cached:
+                part = ChunkTranscript.model_validate(cached)
+            else:
+                part = await self._transcriber.transcribe_chunk(chunk)
+                if scope:
+                    await scope[0].put(scope[1], key, part.model_dump(mode="json"))
+            chunk_transcripts.append(part)
 
         transcript = merge_chunk_transcripts(chunk_transcripts)
         if not transcript.duration and prepared.duration:
@@ -98,7 +128,12 @@ class ContentPipeline:
         """Mine atoms and run the three editors."""
         settings = self._settings
         atom_set = await self._miner.mine(transcript)
-        usable = atom_set.usable(settings.min_atom_confidence)
+        semantic = atom_set if isinstance(atom_set, SemanticResult) else None
+        usable = (
+            editorial_atoms(semantic, transcript)
+            if semantic is not None
+            else atom_set.usable(settings.min_atom_confidence)
+        )
         logger.info(
             "Atoms: %s total, %s usable (min confidence %.2f)",
             len(atom_set.atoms),
@@ -106,8 +141,8 @@ class ContentPipeline:
             settings.min_atom_confidence,
         )
 
-        warnings: list[str] = []
-        if not usable:
+        warnings: list[str] = list(semantic.warnings) if semantic else []
+        if not usable and semantic is None:
             warnings.append(
                 "Ни один контент-атом не прошёл порог уверенности — "
                 "тизер и черновики построены на всём, что нашлось."
@@ -141,6 +176,7 @@ class ContentPipeline:
         return PipelineResult(
             metadata=metadata,
             atoms=usable,
+            semantic=semantic,
             teaser=teaser,
             threads=threads_batch.best(settings.max_threads_candidates),
             reels=reels_batch.best(settings.max_reels_candidates),
@@ -168,8 +204,28 @@ class ContentPipeline:
 
     # -------------------------------------------------------------------- entry
     async def run(self, request: JobRequest) -> PipelineResult:
-        with recording_usage(request.media.duration_seconds or 0, request.dedupe_key):
-            return await self._run(request)
+        job = recording_id(request)
+        with (
+            checkpoint_scope(self.checkpoints, job),
+            recording_usage(request.media.duration_seconds or 0, job) as usage,
+        ):
+            await restore_usage(self.checkpoints, job, usage)
+            await self.checkpoints.put(job, "request", request.model_dump(mode="json"))
+            await self.checkpoints.put(job, "status", {"status": "running"})
+            try:
+                result = await self._run(request)
+            except BaseException as error:
+                await self.checkpoints.put(
+                    job, "status", {"status": "interrupted", "error_type": type(error).__name__}
+                )
+                raise
+            await self.checkpoints.put(job, "status", {"status": "complete"})
+            result.recording_id = job
+            result.usage_diagnostics = await self.checkpoints.get(job, "usage") or {
+                "events": usage.events
+            }
+            await self.checkpoints.put(job, "latest_result", result.model_dump(mode="json"))
+            return result
 
     async def _run(self, request: JobRequest) -> PipelineResult:
         """Full flow for one recording. Temp files are always cleaned up."""
@@ -180,11 +236,48 @@ class ContentPipeline:
             prefix=f"{request.mode.value}-{request.message_id}",
             keep=settings.keep_temp_files,
         ) as workdir:
-            source = await self._downloader.download(request.media, workdir)
-            transcript, chunks = await self.transcribe(
-                source, workdir, reported_duration=request.media.duration_seconds
+            job = recording_id(request)
+            signature = fingerprint(
+                [
+                    settings.groq_whisper_model,
+                    settings.transcript_language,
+                    settings.audio_chunk_minutes,
+                    settings.audio_chunk_overlap_seconds,
+                    settings.audio_target_codec,
+                ]
             )
+            saved = await self.checkpoints.get(job, "transcript")
+            if saved and saved.get("signature") == signature:
+                transcript = Transcript.model_validate(saved["transcript"])
+                chunks = saved["chunks"]
+                logger.info("Checkpoint hit: transcription job=%s", job)
+            else:
+                source = await self._downloader.download(request.media, workdir)
+                transcript, chunks = await self.transcribe(
+                    source, workdir, reported_duration=request.media.duration_seconds
+                )
+                await self.checkpoints.put(
+                    job,
+                    "transcript",
+                    {
+                        "signature": signature,
+                        "transcript": transcript.model_dump(mode="json"),
+                        "chunks": chunks,
+                    },
+                )
             result = await self.analyse(request, transcript, chunks, started)
-            await self.publish(request, result)
+            await self.checkpoints.put(job, "analysis", result.model_dump(mode="json"))
+            published = await self.checkpoints.get(job, "published:" + request.dedupe_key)
+            if published:
+                result.metadata.published = True
+                result.metadata.published_message_id = published["message_id"]
+            else:
+                await self.publish(request, result)
+                if result.metadata.published:
+                    await self.checkpoints.put(
+                        job,
+                        "published:" + request.dedupe_key,
+                        {"message_id": result.metadata.published_message_id},
+                    )
         result.metadata.processing_seconds = time.monotonic() - started
         return result

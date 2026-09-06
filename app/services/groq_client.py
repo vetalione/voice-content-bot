@@ -60,6 +60,7 @@ class GroqClient:
 
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
         self._settings = settings
+        self.cache_identity = ["groq", settings.groq_llm_model, settings.groq_use_json_schema]
         self._own_client = client is None
         self._tpm: dict[str, RollingTPM] = {}
         self._client = client or httpx.AsyncClient(

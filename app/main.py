@@ -99,6 +99,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if container
             else {},
             "status": "ok" if container is not None else "degraded",
+            "text_provider_health": getattr(container.text, "health", {"status": "legacy"})
+            if container
+            else None,
+            "checkpoint_backend": settings.checkpoint_backend,
             "configured": not settings.missing_required(),
             "missing_env": settings.missing_required(),
             "startup_error": startup_error,

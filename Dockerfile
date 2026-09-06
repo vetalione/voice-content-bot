@@ -14,8 +14,10 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY requirements.txt ./
+COPY requirements.txt requirements-claude.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+ARG INSTALL_CLAUDE_SDK=false
+RUN if [ "$INSTALL_CLAUDE_SDK" = "true" ]; then pip install --no-cache-dir -r requirements-claude.txt; fi
 
 COPY app ./app
 COPY prompts ./prompts

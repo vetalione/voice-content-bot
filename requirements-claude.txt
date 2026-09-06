@@ -1,0 +1,2 @@
+# Optional: install the current official SDK; base OpenRouter deployment does not need it.
+claude-agent-sdk

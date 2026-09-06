@@ -37,8 +37,20 @@ def retry_after(headers) -> float | None:
 
 
 class OpenRouterClient:
-    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.AsyncClient | None = None,
+        supported_parameters: set[str] | None = None,
+    ):
         self.settings = settings
+        self.cache_identity = [
+            "openrouter",
+            settings.openrouter_model,
+            settings.openrouter_reasoning_effort,
+            sorted(supported_parameters or []),
+        ]
+        self.supported_parameters = supported_parameters
         self._check_model(settings.openrouter_model)
         self._own_client = client is None
         self.client = client or httpx.AsyncClient(
@@ -97,13 +109,23 @@ class OpenRouterClient:
         # Use OpenRouter's unified control, not Groq-specific reasoning_effort.
         # exclude=true would only hide reasoning; it would still consume the budget.
         # Keep this control even during compatibility fallback and retries.
-        if schema:
+        if schema and (
+            self.supported_parameters is None or "structured_outputs" in self.supported_parameters
+        ):
             body["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {"name": schema_name, "strict": True, "schema": schema},
             }
         else:
+            if schema:
+                body["messages"][0]["content"] += "\nReturn JSON matching: " + json.dumps(
+                    schema, ensure_ascii=False
+                )
+            if self.supported_parameters and "response_format" in self.supported_parameters:
+                body["response_format"] = {"type": "json_object"}
             body["messages"][0]["content"] += "\nReturn a JSON object only."
+        if self.supported_parameters is not None and "reasoning" not in self.supported_parameters:
+            body.pop("reasoning", None)
         compatibility_used = False
         attempt_count = 0
 
@@ -118,6 +140,9 @@ class OpenRouterClient:
                 usage.requests += 1
             attempt_count += 1
             count = usage.requests if usage else attempt_count
+            from app.services.usage import persist_attempt_count
+
+            await persist_attempt_count("openrouter", count)
             logger.info(
                 "LLM request provider=openrouter stage=%s model=%s request_count=%s approximate_input_tokens=%s output_budget=%s reasoning_effort=%s",
                 label,
@@ -189,6 +214,23 @@ class OpenRouterClient:
                 count,
                 cost,
                 response.status_code,
+            )
+            from app.services.usage import capture_usage
+
+            await capture_usage(
+                {
+                    "provider": "openrouter",
+                    "configured_model": target,
+                    "actual_model": actual,
+                    "routed_provider": raw.get("provider"),
+                    "stage": label,
+                    "input_tokens": inp,
+                    "output_tokens": out,
+                    "reasoning_tokens": reasoning,
+                    "reported_cost": cost,
+                    "status": response.status_code,
+                    "id": raw.get("id"),
+                }
             )
             if "error" in raw or response.status_code >= 400:
                 err = raw.get("error")

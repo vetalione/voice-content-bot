@@ -113,18 +113,32 @@ class StructuredAgent:
         return self._prompts.render(self.prompt_file, **values)
 
     async def request_atom_batches(
-        self, response_model, atoms, *, batch_size, limit, max_tokens, temperature, placeholder
+        self,
+        response_model,
+        atoms,
+        *,
+        batch_size,
+        limit,
+        max_tokens,
+        temperature,
+        placeholder,
+        source_atoms=None,
     ):
         from .rendering import render_atoms
 
         async def generate(batch):
             system = self.system_prompt(**{placeholder: min(limit, len(batch))})
-            user = render_atoms(batch)
+            user = render_atoms(batch, related_atoms=source_atoms)
             estimate = request_tokens(system, user, json_schema_for(response_model))
             if (
                 estimate + max_tokens > self.settings.groq_tpm_limit
                 if self.settings.text_provider == "groq"
-                else estimate > self.settings.text_max_input_tokens
+                else estimate
+                > (
+                    self.settings.semantic_max_input_tokens
+                    if self.settings.semantic_pipeline_enabled
+                    else self.settings.text_max_input_tokens
+                )
             ):
                 if len(batch) == 1:
                     raise LLMError(
@@ -162,6 +176,28 @@ class StructuredAgent:
         request_label: str | None = None,
         repair_attempts: int = 2,
     ) -> ModelT:
+        from app.services.checkpoints import active_checkpoint, fingerprint
+
+        context = active_checkpoint.get()
+        cache_key = "llm:" + fingerprint(
+            [
+                getattr(self._llm, "cache_identity", type(self._llm).__name__),
+                request_label or self.name,
+                system,
+                user,
+                response_model.model_json_schema(),
+                max_tokens,
+                temperature,
+            ]
+        )
+        if context:
+            cached = await context[0].get(context[1], cache_key)
+            if cached and cached.get("status") == "complete":
+                logger.info("Checkpoint hit stage=%s", request_label or self.name)
+                return response_model.model_validate(cached["result"])
+            await context[0].put(
+                context[1], cache_key, {"status": "running", "stage": request_label or self.name}
+            )
         schema = json_schema_for(response_model)
         attempt_user = user
         last_error: Exception | None = None
@@ -191,11 +227,24 @@ class StructuredAgent:
                         "Return one complete JSON object matching the required schema. "
                         "Keep text concise and use fewer items if necessary to fit the output budget."
                     )
+                    if self.settings.semantic_pipeline_enabled:
+                        attempt_user += " Preserve omissions using overflow=true and specific overflow_hints where the schema supports them; never silently discard distinct ideas."
                 continue
             except LLMError:
                 raise  # quota/network problems are not repairable by re-prompting
             try:
-                return response_model.model_validate(payload)
+                validated = response_model.model_validate(payload)
+                if context:
+                    await context[0].put(
+                        context[1],
+                        cache_key,
+                        {
+                            "status": "complete",
+                            "stage": request_label or self.name,
+                            "result": validated.model_dump(mode="json"),
+                        },
+                    )
+                return validated
             except ValidationError as error:
                 last_error = error
                 logger.warning(

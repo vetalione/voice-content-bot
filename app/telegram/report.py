@@ -116,6 +116,34 @@ def render_reels(candidates: list[ReelsCandidate]) -> str:
 def render_report(result: PipelineResult) -> str:
     """Full owner report, ready for :func:`split_html_message`."""
     sections = [render_metadata(result.metadata)]
+    if result.semantic:
+        from collections import Counter
+
+        events = result.usage_diagnostics.get("events", [])
+        counts = Counter(
+            e.get("actual_model") or e.get("configured_model", "unknown") for e in events
+        )
+        costs = [
+            e["reported_cost"]
+            for e in events
+            if e.get("provider") == "openrouter" and isinstance(e.get("reported_cost"), int | float)
+        ]
+        diag = result.semantic.diagnostics
+        sections.append(
+            "<b>Семантический разбор</b>\n"
+            + f"ID: <code>{escape(result.recording_id)}</code>\n"
+            + f"Атомов: {len(result.semantic.atoms)} · аудитор: {escape(result.semantic.auditor)}\n"
+            + f"Добавлено аудитом: {result.semantic.auditor_added_atom_count} · уверенность покрытия: {diag.coverage_confidence:.2f} (оценка модели)\n"
+            + "Запросы: "
+            + escape(str(dict(counts)))
+            + "\n"
+            + (
+                "OpenRouter reported cost: $" + f"{sum(costs):.4f}"
+                if costs
+                else "OpenRouter cost: нет данных"
+            )
+            + f" · ответов с ценой: {len(costs)}"
+        )
 
     teaser = render_teaser_preview(result)
     if teaser:

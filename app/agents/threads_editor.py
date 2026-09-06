@@ -39,11 +39,15 @@ class ThreadsEditorAgent(StructuredAgent):
         if not atoms:
             return ThreadsBatch()
 
-        ranked = rank_for_threads(atoms)[: self.settings.max_threads_candidates]
+        eligible = [
+            a for a in atoms if a.content_route is None or a.content_route in ("THREADS", "BOTH")
+        ]
+        ranked = rank_for_threads(eligible)[: self.settings.max_threads_candidates]
         limit = self.settings.max_threads_candidates
         batch = await self.request_atom_batches(
             ThreadsBatch,
             ranked,
+            source_atoms=atoms,
             batch_size=self.settings.threads_batch_size,
             limit=limit,
             max_tokens=(

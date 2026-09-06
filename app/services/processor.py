@@ -40,12 +40,66 @@ class RecordingProcessor:
             request.message_id,
             request.media.duration_seconds,
         )
+        text = getattr(self._pipeline._miner, "_llm", None)
+        if hasattr(text, "ensure_primary"):
+            await text.ensure_primary()
+        await self._check_budget(enforce=True)
         result = await self._pipeline.run(request)
+        await self._check_budget(enforce=False)
         await self._deliver(request, result)
         return result
 
+    async def _check_budget(self, *, enforce):
+        from datetime import UTC, datetime
+
+        # Exhausted paid credits must not block an explicitly free-only profile.
+        if not self._settings.openrouter_allow_paid:
+            return
+        text = getattr(self._pipeline._miner, "_llm", None)
+        if not hasattr(text, "monthly_usage"):
+            return
+        used = await text.monthly_usage()
+        if used is None:
+            return
+        s = self._settings
+        threshold = (
+            s.monthly_llm_budget_usd
+            if used >= s.monthly_llm_budget_usd
+            else s.soft_budget_warning_usd
+        )
+        if used >= threshold:
+            key = f"{datetime.now(UTC):%Y-%m}:{threshold}"
+            notified = await self._pipeline.checkpoints.get("budget-notifications", key)
+            if not notified:
+                try:
+                    await self._delivery.send_owner_html(
+                        f"<b>Бюджет OpenRouter</b>: ${used:.2f} за месяц по данным API; ориентир ${s.monthly_llm_budget_usd:.2f}."
+                    )
+                    await self._pipeline.checkpoints.put(
+                        "budget-notifications", key, {"notified": True, "reported_usage": used}
+                    )
+                except Exception:
+                    logger.exception("Could not deliver budget warning")
+        if enforce and used >= s.monthly_llm_budget_usd and s.stop_on_budget_exceeded:
+            raise RuntimeError(
+                "Configured monthly budget reached; processing paused by STOP_ON_BUDGET_EXCEEDED"
+            )
+
     async def _deliver(self, request: JobRequest, result: PipelineResult) -> None:
         await self._delivery.send_owner_html(render_report(result))
+        if result.semantic:
+            import json
+
+            archive = {
+                "recording_id": result.recording_id,
+                "semantic": result.semantic.model_dump(mode="json"),
+                "usage": result.usage_diagnostics,
+            }
+            await self._delivery.send_owner_document(
+                f"semantic-{request.message_id}.json",
+                json.dumps(archive, ensure_ascii=False, indent=2).encode(),
+                caption="Все мысли, связи и диагностика; архивные атомы сохранены.",
+            )
 
         if self._settings.enable_full_transcript and result.transcript_text:
             filename = f"transcript-{request.mode.value}-{request.message_id}.txt"

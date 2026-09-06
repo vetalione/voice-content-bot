@@ -53,11 +53,15 @@ class ReelsEditorAgent(StructuredAgent):
         if not atoms:
             return ReelsBatch()
 
-        ranked = rank_for_reels(atoms)[: self.settings.max_reels_candidates]
+        eligible = [
+            a for a in atoms if a.content_route is None or a.content_route in ("REELS", "BOTH")
+        ]
+        ranked = rank_for_reels(eligible)[: self.settings.max_reels_candidates]
         limit = self.settings.max_reels_candidates
         batch = await self.request_atom_batches(
             ReelsBatch,
             ranked,
+            source_atoms=atoms,
             batch_size=self.settings.reels_batch_size,
             limit=limit,
             max_tokens=(

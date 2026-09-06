@@ -10,7 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -83,12 +83,44 @@ class Settings(BaseSettings):
     openrouter_reasoning_effort: Literal["none", "minimal", "low", "medium", "high"] = "none"
     openrouter_timeout_seconds: float = Field(default=120, gt=0)
     openrouter_max_retries: int = Field(default=2, ge=0, le=3)
-    openrouter_max_requests_per_recording: int = Field(default=30, ge=1, le=100)
+    openrouter_max_requests_per_recording: int = Field(default=60, ge=1, le=100)
     text_max_input_tokens: int = Field(default=12000, ge=1000)
     text_extraction_max_tokens: int = Field(default=3000, gt=0)
-    text_teaser_max_tokens: int = Field(default=800, gt=0)
-    text_threads_max_tokens: int = Field(default=2000, gt=0)
-    text_reels_max_tokens: int = Field(default=3000, gt=0)
+    text_teaser_max_tokens: int = Field(default=1800, gt=0)
+    text_threads_max_tokens: int = Field(default=5000, gt=0)
+    text_reels_max_tokens: int = Field(default=6000, gt=0)
+
+    # Semantic editor. Model IDs deliberately have no application defaults.
+    semantic_pipeline_enabled: bool = True
+    openrouter_primary_model: str = ""
+    openrouter_primary_fallback_model: str = ""
+    openrouter_escalation_model: str = ""
+    openrouter_allow_escalation: bool = False
+    quality_auditor: Literal["none", "kimi_k3", "claude", "auto"] = "auto"
+    writing_provider: Literal["primary", "escalation", "claude"] = "primary"
+    force_quality_audit: bool = False
+    extraction_window_minutes: float = Field(default=12, gt=0)
+    extraction_overlap_minutes: float = Field(default=2, ge=0)
+    target_atom_limit: int = Field(default=10, ge=1)
+    overflow_max_passes: int = Field(default=2, ge=1, le=5)
+    semantic_max_input_tokens: int = Field(default=90000, ge=4000)
+    semantic_max_output_tokens: int = Field(default=8000, ge=1000)
+    semantic_reasoning_effort: Literal["none", "low", "medium", "high"] = "medium"
+    writing_reasoning_effort: Literal["none", "low", "medium", "high"] = "low"
+    escalate_if_duration_minutes: float = Field(default=30, gt=0)
+    coverage_confidence_threshold: float = Field(default=0.7, ge=0, le=1)
+    claude_enabled: bool = False
+    claude_model: str = ""
+    claude_code_oauth_token: str = Field(default="", repr=False)
+    claude_timeout_seconds: float = Field(default=300, gt=0)
+    claude_max_budget_usd: float = Field(default=0.5, gt=0)
+    checkpoint_backend: Literal["none", "sqlite", "supabase"] = "sqlite"
+    checkpoint_sqlite_path: Path = Path("/tmp/voice-content-bot/checkpoints.sqlite3")
+    supabase_url: str = ""
+    supabase_service_role_key: str = Field(default="", repr=False)
+    monthly_llm_budget_usd: float = Field(default=15, gt=0)
+    soft_budget_warning_usd: float = Field(default=10, ge=0)
+    stop_on_budget_exceeded: bool = False
 
     # -------------------------------------------------------------------- Groq
     groq_api_key: str = Field(default="")
@@ -167,6 +199,14 @@ class Settings(BaseSettings):
         description="When true, the public teaser is reported but never published.",
     )
 
+    @model_validator(mode="after")
+    def _semantic_windows(self):
+        if self.extraction_overlap_minutes >= self.extraction_window_minutes:
+            raise ValueError(
+                "EXTRACTION_OVERLAP_MINUTES must be smaller than EXTRACTION_WINDOW_MINUTES"
+            )
+        return self
+
     @field_validator("log_level")
     @classmethod
     def _upper(cls, value: str) -> str:
@@ -218,6 +258,22 @@ class Settings(BaseSettings):
             not self.openrouter_api_key or _is_placeholder(self.openrouter_api_key)
         ):
             missing.append("OPENROUTER_API_KEY")
+        if (
+            self.semantic_pipeline_enabled
+            and self.text_provider == "openrouter"
+            and not self.openrouter_primary_model
+        ):
+            missing.append("OPENROUTER_PRIMARY_MODEL")
+        if self.checkpoint_backend == "supabase":
+            if not self.supabase_url:
+                missing.append("SUPABASE_URL")
+            if not self.supabase_service_role_key:
+                missing.append("SUPABASE_SERVICE_ROLE_KEY")
+        if self.claude_enabled:
+            if not self.claude_model:
+                missing.append("CLAUDE_MODEL")
+            if not self.claude_code_oauth_token:
+                missing.append("CLAUDE_CODE_OAUTH_TOKEN")
         if not self.owner_telegram_id:
             missing.append("OWNER_TELEGRAM_ID")
         if not self.allowed_channel_id:

@@ -68,3 +68,10 @@ Return JSON matching the supplied schema. Keep rationales and beat summaries bri
 ## Author voice reference
 
 {{voice_style}}
+
+
+SEMANTIC FIDELITY: Use supplied supporting atoms, implications, qualifications and
+source excerpts. Keep second-order economic/cultural insights intact. Do not
+flatten "agents develop taste -> collectors use it as status signal" into "AI
+changes art". Context-only atoms support the selected draft; do not generate
+extra candidates for them. Never invent a causal link not supported by the source.

@@ -38,6 +38,8 @@ STRANGER_ID = 999999
 def settings(tmp_path: Path) -> Settings:
     return Settings(
         text_provider="groq",
+        semantic_pipeline_enabled=False,
+        checkpoint_backend="none",
         bot_token=FAKE_TOKEN,
         allowed_channel_id=CHANNEL_ID,
         owner_telegram_id=OWNER_ID,

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.models.atoms import ContentAtom
 from app.models.media import RecordingMetadata
+from app.models.semantic import SemanticResult
 from app.utils.timecode import format_timecode
 
 
@@ -119,3 +120,6 @@ class PipelineResult(BaseModel):
     reels: list[ReelsCandidate] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     transcript_text: str = Field(default="", repr=False)
+    semantic: SemanticResult | None = None
+    usage_diagnostics: dict = Field(default_factory=dict)
+    recording_id: str = ""

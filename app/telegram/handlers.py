@@ -24,6 +24,7 @@ from app.telegram.filters import (
     AllowedPrivateUserFilter,
     HasSupportedMediaFilter,
 )
+from app.telegram.settings_menu import register_settings_menu
 from app.utils.timecode import format_timecode
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ HELP_TEXT = (
     "контент-атомы и верну черновики для Threads и Reels.\n\n"
     "В личке я ничего не публикую в канал: это тестовый и архивный режим.\n"
     "Новые голосовые в канале обрабатываются автоматически.\n\n"
-    "/status — очередь и настройки"
+    "/status — очередь и настройки\n/settings — выбор модели (для владельца)"
 )
 
 
@@ -57,12 +58,16 @@ class JobSubmitter:
         processor: RecordingProcessor,
         dedupe: DedupeStore,
         delivery: DeliveryGateway,
+        preferences=None,
+        process_selected=None,
     ) -> None:
         self._settings = settings
         self._runner = runner
         self._processor = processor
         self._dedupe = dedupe
         self._delivery = delivery
+        self._preferences = preferences
+        self._process_selected = process_selected
 
     async def submit(self, request: JobRequest) -> bool:
         """Returns True when the job was accepted."""
@@ -70,8 +75,24 @@ class JobSubmitter:
             logger.info("Skipping duplicate delivery of %s", request.dedupe_key)
             return False
 
+        try:
+            selected = await self._preferences.snapshot() if self._preferences else None
+        except Exception as error:
+            self._dedupe.release(request.dedupe_key)
+            await self._processor.notify_failure(request, error)
+            return False
+
         async def run() -> None:
-            await self._processor.process(request)
+            if selected is not None and self._process_selected is not None:
+                logger.info(
+                    "Recording model snapshot job=%s model=%s allow_paid=%s",
+                    request.dedupe_key,
+                    selected.openrouter_primary_model,
+                    selected.openrouter_allow_paid,
+                )
+                await self._process_selected(request, selected)
+            else:
+                await self._processor.process(request)
 
         async def on_error(error: BaseException) -> None:
             await self._processor.notify_failure(request, error)
@@ -90,9 +111,12 @@ class JobSubmitter:
         return True
 
 
-def build_router(settings: Settings, submitter: JobSubmitter, runner: JobRunner) -> Router:
+def build_router(
+    settings: Settings, submitter: JobSubmitter, runner: JobRunner, preferences=None
+) -> Router:
     """Assemble the router. Handler order defines precedence."""
     router = Router(name="voice-content-bot")
+    register_settings_menu(router, settings, preferences)
 
     allowed_channel = AllowedChannelFilter(settings.allowed_channel_id)
     allowed_private = AllowedPrivateUserFilter(settings.allowed_user_ids)
@@ -145,6 +169,18 @@ def build_router(settings: Settings, submitter: JobSubmitter, runner: JobRunner)
     @router.message(F.chat.type == "private", allowed_private, Command("status"))
     async def on_private_status(message: Message) -> None:
         stats = runner.stats
+        try:
+            model = (
+                await preferences.description()
+                if preferences
+                else (
+                    f"Groq: {settings.groq_llm_model}"
+                    if settings.text_provider == "groq"
+                    else f"OpenRouter: {settings.openrouter_primary_model or settings.openrouter_model}"
+                )
+            )
+        except Exception:
+            model = "Настройки недоступны — проверь /settings и подключение к базе"
         await message.answer(
             "\n".join(
                 [
@@ -153,7 +189,7 @@ def build_router(settings: Settings, submitter: JobSubmitter, runner: JobRunner)
                     f"Готово: {stats.completed} · Ошибок: {stats.failed}",
                     f"Канал: {settings.allowed_channel_id}",
                     f"STT: {settings.groq_whisper_model}",
-                    f"LLM: {settings.groq_llm_model}",
+                    f"LLM для новых записей: {model}",
                     f"Лимит загрузки: {settings.max_stt_upload_mb:.0f} МБ · "
                     f"чанк {settings.audio_chunk_minutes:.0f} мин",
                     f"Полный транскрипт: {'вкл' if settings.enable_full_transcript else 'выкл'}",
@@ -184,7 +220,9 @@ def build_router(settings: Settings, submitter: JobSubmitter, runner: JobRunner)
                 "В канал ничего не уйдёт."
             )
         else:
-            await message.answer("Эта запись уже в обработке или уже обработана.")
+            await message.answer(
+                "Запись не добавлена: она уже принята либо возникла ошибка при постановке в очередь. /status — состояние очереди."
+            )
 
     @router.message(F.chat.type == "private", allowed_private)
     async def on_private_unsupported(message: Message) -> None:

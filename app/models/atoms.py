@@ -6,6 +6,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.models.semantic import AtomKind, ContentRoute, SourceRange
 from app.utils.timecode import format_timecode
 
 
@@ -73,6 +74,15 @@ class ContentAtom(BaseModel):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     should_ignore: bool = False
     ignore_reason: str = Field(default="", max_length=400)
+    semantic_kind: AtomKind | None = None
+    semantic_claim: str = ""
+    content_route: ContentRoute | None = None
+    source_ranges: list[SourceRange] = Field(default_factory=list)
+    parent_atom_ids: list[str] = Field(default_factory=list)
+    supports_atom_ids: list[str] = Field(default_factory=list)
+    derived_from_atom_ids: list[str] = Field(default_factory=list)
+    contradicts_atom_ids: list[str] = Field(default_factory=list)
+    related_atom_ids: list[str] = Field(default_factory=list)
 
     @field_validator("categories", mode="before")
     @classmethod
