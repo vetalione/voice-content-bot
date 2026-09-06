@@ -39,6 +39,8 @@ services:
         value: openrouter
       - key: OPENROUTER_MODEL
         value: openrouter/free
+      - key: OPENROUTER_REASONING_EFFORT
+        value: none
       - key: OPENROUTER_ALLOW_PAID
         value: "false"
       - key: MAX_THREADS_CANDIDATES

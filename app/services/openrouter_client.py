@@ -76,7 +76,11 @@ class OpenRouterClient:
             raise LLMError(
                 f"{label}: text input exceeds TEXT_MAX_INPUT_TOKENS; shorten/split input"
             )
-        provider = {"require_parameters": True}
+        # The free router performs feature selection itself. Its own parameter
+        # metadata omits reasoning; requiring it there rejects otherwise valid
+        # routed requests before they reach a model. Keep strict JSON and local
+        # validation, and still send the reasoning control to the chosen model.
+        provider = {"require_parameters": target != "openrouter/free"}
         if is_free_model(target) or not self.settings.openrouter_allow_paid:
             provider["max_price"] = {"prompt": 0, "completion": 0, "request": 0, "image": 0}
         body = {
@@ -84,8 +88,15 @@ class OpenRouterClient:
             "provider": provider,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             "max_tokens": max_tokens or 2000,
+            "reasoning": (
+                {"effort": "none", "enabled": False}
+                if self.settings.openrouter_reasoning_effort == "none"
+                else {"effort": self.settings.openrouter_reasoning_effort}
+            ),
         }
-        # Do not send model-specific reasoning/temperature parameters to the free router.
+        # Use OpenRouter's unified control, not Groq-specific reasoning_effort.
+        # exclude=true would only hide reasoning; it would still consume the budget.
+        # Keep this control even during compatibility fallback and retries.
         if schema:
             body["response_format"] = {
                 "type": "json_schema",
@@ -108,12 +119,13 @@ class OpenRouterClient:
             attempt_count += 1
             count = usage.requests if usage else attempt_count
             logger.info(
-                "LLM request provider=openrouter stage=%s model=%s request_count=%s approximate_input_tokens=%s output_budget=%s",
+                "LLM request provider=openrouter stage=%s model=%s request_count=%s approximate_input_tokens=%s output_budget=%s reasoning_effort=%s",
                 label,
                 target,
                 count,
                 input_estimate,
                 body["max_tokens"],
+                self.settings.openrouter_reasoning_effort,
             )
             response = await self.client.post(
                 "/chat/completions",
@@ -150,6 +162,13 @@ class OpenRouterClient:
                 token_count(details.get("reasoning_tokens")),
             )
             cost = meta.get("cost")
+            if self.settings.openrouter_reasoning_effort == "none" and reasoning:
+                logger.warning(
+                    "LLM provider=openrouter stage=%s actual_model=%s reported_reasoning_tokens=%s despite reasoning disabled; upstream control may be ignored",
+                    label,
+                    actual,
+                    reasoning,
+                )
             if usage:
                 usage.input_tokens += inp
                 usage.output_tokens += out
@@ -225,9 +244,20 @@ class OpenRouterClient:
             raise LLMError(f"{label}: OpenRouter network error ({type(error).__name__})") from error
         try:
             choice = raw["choices"][0]
+            content = choice["message"].get("content")
+            logger.info(
+                "LLM completion provider=openrouter stage=%s actual_model=%s finish_reason=%s content_chars=%s",
+                label,
+                raw.get("model"),
+                choice.get("finish_reason"),
+                len(content) if isinstance(content, str) else 0,
+            )
             if choice.get("finish_reason") == "length":
-                raise LLMGenerationError(f"{label}: OpenRouter output truncated")
-            content = choice["message"]["content"]
+                raise LLMGenerationError(
+                    f"{label}: OpenRouter output truncated (model={raw.get('model')}, "
+                    f"output_budget={body['max_tokens']}, "
+                    f"reasoning_effort={self.settings.openrouter_reasoning_effort})"
+                )
             if not isinstance(content, str):
                 raise ValueError("missing text")
             text = content.strip()

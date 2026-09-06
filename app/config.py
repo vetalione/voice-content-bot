@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_model: str = "openrouter/free"
     openrouter_allow_paid: bool = False
+    openrouter_reasoning_effort: Literal["none", "minimal", "low", "medium", "high"] = "none"
     openrouter_timeout_seconds: float = Field(default=120, gt=0)
     openrouter_max_retries: int = Field(default=2, ge=0, le=3)
     openrouter_max_requests_per_recording: int = Field(default=30, ge=1, le=100)

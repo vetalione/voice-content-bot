@@ -86,6 +86,7 @@ Do not add OpenAI or Anthropic keys.
 Optional OpenRouter/text settings and defaults:
 
 ```env
+OPENROUTER_REASONING_EFFORT=none
 OPENROUTER_TIMEOUT_SECONDS=120
 OPENROUTER_MAX_RETRIES=2
 OPENROUTER_MAX_REQUESTS_PER_RECORDING=30
@@ -117,12 +118,23 @@ Free availability/quota failures surface to the existing owner failure notifier
 once applicable bounded retries have ended. Free routing does not guarantee
 capacity or enough requests per day for every recording.
 
-When a schema is supplied, request `json_schema` with strict output and
-`provider.require_parameters=true`. OpenRouter's free router selects models
-supporting those features. Only an explicit unsupported response-format error
+When a schema is supplied, request `json_schema` with strict output.
+Direct model requests use `provider.require_parameters=true`. For `openrouter/free`,
+use `require_parameters=false`: the router already performs feature selection,
+and its generic parameter filter rejects the unified reasoning control with 404.
+The schema and reasoning control are still sent, and Pydantic always validates
+responses. This does not guarantee every upstream honors reasoning controls;
+nonzero reported reasoning with reasoning disabled emits a warning. Only an explicit unsupported response-format error
 allows a same-model, same-price-guard plain JSON request with the schema in the
 instructions. A generic no-endpoints error does not downgrade or change models.
+Requests explicitly disable reasoning by default using OpenRouter's unified
+`reasoning: {"effort":"none","enabled":false}` control. Hiding reasoning with
+`exclude:true` would still consume output tokens and is not used as a substitute.
+`OPENROUTER_REASONING_EFFORT` can explicitly opt into minimal/low/medium/high.
+Explicit incompatibility does not silently remove controls or switch to paid routing. An upstream may still reject or ignore a
+control, so completion logs include finish reason and visible content length.
 No Groq-specific reasoning settings or TPM scheduler run on this path.
+See [OpenRouter reasoning controls](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
 Pydantic always validates results; invalid JSON/truncation and validation failures
 have one local repair/retry. Invalid schema/authentication errors fail directly.
 429 honors `Retry-After` (seconds or HTTP date), otherwise waits 60 seconds;
@@ -154,12 +166,24 @@ After filling only `OPENROUTER_API_KEY` in `.env`:
 .venv/bin/python scripts/smoke_text.py
 ```
 
-This forces `openrouter/free` with paid routing disabled, a 1024-token output cap (including room for model reasoning),
+This defaults to `openrouter/free` with paid routing disabled and a 1024-token output cap,
 and a maximum of **one HTTP request**, without retries. It validates a tiny
 `{"ok":true}` response. It uses free quota, does not transcribe, and never sends
 Telegram messages. A free model may still be unavailable or need more output
 space; failure is reported without switching to paid routing. The smoke check is
 manual and is never part of the test suite.
+
+For a stronger check, use the real extraction prompt/schema on synthetic Russian
+text (one HTTP request, no Whisper or Telegram):
+
+```bash
+.venv/bin/python scripts/smoke_text.py --extraction
+```
+
+Add `--model nvidia/nemotron-3-super-120b-a12b:free` to test that specific free
+model instead of a random router selection. Paid model IDs are rejected. This
+check uses the extraction output budget (default 3000) and validates nonempty
+atoms. It is still not a full live recording/editor test.
 
 ## Tests and webhook
 

@@ -61,9 +61,10 @@ async def test_structured_success_auth_routed_model_and_summary(or_settings, cap
             "request": 0,
             "image": 0,
         }
-        assert body["provider"]["require_parameters"] is True
+        assert body["provider"]["require_parameters"] is False
         assert body["response_format"]["json_schema"]["strict"] is True
         assert "reasoning_effort" not in body
+        assert body["reasoning"] == {"effort": "none", "enabled": False}
         return completion('{"teaser":"done","timestamps":[],"reasoning":""}')
 
     async with httpx.AsyncClient(
@@ -116,6 +117,81 @@ async def test_invalid_json_stops_after_two(or_settings):
         with pytest.raises(LLMGenerationError):
             await agent.request(ChannelTeaser, system="s", user="u")
     assert len(seen) == 2
+
+
+async def test_truncation_logs_model_and_remains_bounded(or_settings, caplog):
+    seen = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        seen.append(body)
+        assert body["reasoning"] == {"effort": "none", "enabled": False}
+        return httpx.Response(
+            200,
+            json={
+                "model": "nvidia/nemotron-3-super-120b-a12b:free",
+                "usage": {
+                    "prompt_tokens": 838,
+                    "completion_tokens": 3000,
+                    "completion_tokens_details": {"reasoning_tokens": 2891},
+                    "cost": 0,
+                },
+                "choices": [{"finish_reason": "length", "message": {"content": '{"teaser":'}}],
+            },
+        )
+
+    async with httpx.AsyncClient(
+        base_url="https://openrouter.ai/api/v1", transport=httpx.MockTransport(handler)
+    ) as http:
+        agent = StructuredAgent(
+            OpenRouterClient(or_settings, http), PromptLibrary(or_settings.prompts_dir), or_settings
+        )
+        with caplog.at_level("INFO"), pytest.raises(LLMGenerationError, match="output_budget=3000"):
+            with recording_usage(105, "truncated") as usage:
+                await agent.request(ChannelTeaser, system="s", user="u", max_tokens=3000)
+    assert len(seen) == usage.requests == 2
+    assert usage.output_tokens == 6000
+    assert "finish_reason=length" in caplog.text and "reasoning_tokens=2891" in caplog.text
+
+
+@pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high"])
+async def test_reasoning_opt_in_uses_unified_control(or_settings, effort):
+    configured = or_settings.model_copy(update={"openrouter_reasoning_effort": effort})
+
+    def handler(req):
+        assert json.loads(req.content)["reasoning"] == {"effort": effort}
+        return completion("{}")
+
+    async with httpx.AsyncClient(
+        base_url="https://openrouter.ai/api/v1", transport=httpx.MockTransport(handler)
+    ) as http:
+        assert await OpenRouterClient(configured, http).chat_json(system="s", user="u") == {}
+
+
+async def test_unsupported_reasoning_is_not_silently_removed(or_settings):
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        return httpx.Response(
+            400,
+            json={
+                "error": {
+                    "param": "reasoning",
+                    "message": "reasoning none not supported for this model",
+                }
+            },
+        )
+
+    async with httpx.AsyncClient(
+        base_url="https://openrouter.ai/api/v1", transport=httpx.MockTransport(handler)
+    ) as http:
+        agent = StructuredAgent(
+            OpenRouterClient(or_settings, http), PromptLibrary(or_settings.prompts_dir), or_settings
+        )
+        with pytest.raises(LLMError, match="reasoning none not supported"):
+            await agent.request(ChannelTeaser, system="s", user="u")
+    assert len(seen) == 1
 
 
 @pytest.mark.parametrize("html_error", [False, True])
@@ -226,6 +302,7 @@ async def test_explicit_paid_model_requires_opt_in(or_settings):
         body = json.loads(req.content)
         assert body["model"] == "some/paid-model"
         assert "max_price" not in body["provider"]
+        assert body["provider"]["require_parameters"] is True
         return completion("{}", cost=0.001)
 
     async with httpx.AsyncClient(
@@ -251,6 +328,7 @@ async def test_explicit_unsupported_schema_keeps_free_model(or_settings):
                 },
             )
         assert "response_format" not in body
+        assert body["reasoning"] == {"effort": "none", "enabled": False}
         assert "Return only JSON matching" in body["messages"][0]["content"]
         return completion('{"teaser":"ok"}')
 
@@ -264,6 +342,28 @@ async def test_explicit_unsupported_schema_keeps_free_model(or_settings):
     assert all(
         b["model"] == "openrouter/free" and b["provider"]["max_price"]["request"] == 0 for b in seen
     )
+
+
+async def test_direct_free_model_requires_parameters_and_disables_reasoning(or_settings):
+    configured = or_settings.model_copy(
+        update={"openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free"}
+    )
+
+    def handler(req):
+        body = json.loads(req.content)
+        assert body["provider"]["require_parameters"] is True
+        assert body["provider"]["max_price"]["completion"] == 0
+        assert body["reasoning"] == {"effort": "none", "enabled": False}
+        assert body["response_format"]["json_schema"]["strict"] is True
+        return completion('{"teaser":"ok","timestamps":[],"reasoning":""}')
+
+    async with httpx.AsyncClient(
+        base_url="https://openrouter.ai/api/v1", transport=httpx.MockTransport(handler)
+    ) as http:
+        agent = StructuredAgent(
+            OpenRouterClient(configured, http), PromptLibrary(configured.prompts_dir), configured
+        )
+        assert (await agent.request(ChannelTeaser, system="s", user="u")).teaser == "ok"
 
 
 async def test_hour_recording_has_bounded_calls_without_groq_text(or_settings, monkeypatch):
@@ -280,6 +380,7 @@ async def test_hour_recording_has_bounded_calls_without_groq_text(or_settings, m
     def handler(req):
         body = json.loads(req.content)
         name = body["response_format"]["json_schema"]["name"]
+        assert body["reasoning"] == {"effort": "none", "enabled": False}
         names.append(name)
         if name == "AtomExtraction":
             counts["extraction"] += 1
