@@ -7,7 +7,10 @@ never waits for transcription.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -78,7 +81,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         container: Container | None = getattr(request.app.state, "container", None)
         startup_error = getattr(request.app.state, "startup_error", "")
         stats = container.runner.stats if container else None
+        logger.warning(
+            "Health probe pid=%s uptime=%s running=%s",
+            os.getpid(),
+            container.runner.diagnostics()["uptime_seconds"] if container else None,
+            stats.running if stats else 0,
+        )
         return {
+            "runtime": {
+                "revision": os.getenv("RENDER_GIT_COMMIT", "unknown"),
+                "event_loop": type(asyncio.get_running_loop()).__module__,
+                "unix_time": time.time(),
+            },
+            "tpm_diagnostics": {
+                model: limiter.diagnostics() for model, limiter in container.groq._tpm.items()
+            }
+            if container
+            else {},
             "status": "ok" if container is not None else "degraded",
             "configured": not settings.missing_required(),
             "missing_env": settings.missing_required(),

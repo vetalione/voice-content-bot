@@ -35,6 +35,8 @@ class RollingTPM:
         self.blocked_until = 0.0
         self.remote_remaining: int | None = None
         self.remote_until = 0.0
+        self.wait_state: dict = {}
+        self.wake_count = 0
 
     async def reserve(
         self, tokens: int, *, label: str, attempt: int, input_tokens: int, output: int
@@ -71,13 +73,40 @@ class RollingTPM:
                     wait,
                 )
                 if wait > 0:
-                    await self.sleep(min(wait, 10.0))
+                    interval = min(wait, 10.0)
+                    loop = asyncio.get_running_loop()
+                    self.wait_state = {
+                        "started_monotonic": self.clock(),
+                        "started_loop_time": loop.time(),
+                        "sleep_seconds": interval,
+                        "requested_wait_seconds": wait,
+                    }
+                    await self.sleep(interval)
+                    self.wake_count += 1
+                    self.wait_state = {}
                     continue
                 reservation = (self.clock(), tokens)
                 self.events.append(reservation)
                 if self.remote_until > now and self.remote_remaining is not None:
                     self.remote_remaining = max(0, self.remote_remaining - tokens)
                 return reservation
+
+    def diagnostics(self):
+        now = self.clock()
+        state = dict(self.wait_state)
+        if state:
+            state["elapsed_monotonic"] = round(now - state["started_monotonic"], 3)
+            state["elapsed_loop_time"] = round(
+                asyncio.get_running_loop().time() - state["started_loop_time"], 3
+            )
+        return {
+            "wake_count": self.wake_count,
+            "waiting": state,
+            "lock_held": self.lock.locked(),
+            "cooldown_remaining": max(0, self.blocked_until - now),
+            "remote_reset_remaining": max(0, self.remote_until - now),
+            "remote_remaining": self.remote_remaining,
+        }
 
     def settle(self, reservation, usage):
         """Replace a successful reservation with reported usage; errors retain it."""
