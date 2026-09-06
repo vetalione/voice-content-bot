@@ -138,7 +138,7 @@ async def test_enrichment_one_atom_at_a_time(settings, transcript):
     )
     extraction = [c for c in llm.calls if c["label"].startswith("content_extraction")]
     enrichment = [c for c in llm.calls if c["label"].startswith("content_enrichment")]
-    assert extraction and all(c["max_tokens"] == 800 for c in extraction)
+    assert extraction and all(c["max_tokens"] == 1500 for c in extraction)
     assert len(enrichment) == len(result.atoms) == 2
     assert all("Source excerpt:" in c["user"] for c in enrichment)
     assert all("TRANSCRIPT WINDOW" not in c["user"] for c in enrichment)

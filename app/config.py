@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     groq_whisper_model: str = Field(default="whisper-large-v3")
     groq_llm_model: str = Field(default="openai/gpt-oss-120b")
     groq_llm_temperature: float = Field(default=0.6, ge=0.0, le=2.0)
-    groq_extraction_max_tokens: int = Field(default=800, ge=700, le=900)
+    groq_extraction_max_tokens: int = Field(default=1500, ge=700, le=1600)
     groq_mining_max_tokens: int = Field(default=1200, gt=0)
     groq_teaser_max_tokens: int = Field(default=400, gt=0)
     groq_threads_max_tokens: int = Field(default=1200, gt=0)

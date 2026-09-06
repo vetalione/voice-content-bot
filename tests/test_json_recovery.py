@@ -83,7 +83,7 @@ async def test_miner_splits_failed_window_without_losing_segments(settings):
     assert calls[0]["user"] == calls[1]["user"]
     for i in range(4):
         assert sum(f"unique{i}" in c["user"] for c in calls[2:]) == 1
-    assert all(c["max_tokens"] == 800 for c in calls)
+    assert [c["max_tokens"] for c in calls] == [1500, 1600, 1500, 1500]
     assert len(result) == 2
 
 

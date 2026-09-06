@@ -192,6 +192,6 @@ async def test_miner_and_teaser_use_stage_caps(settings, transcript):
     prompts = PromptLibrary(settings.prompts_dir)
     mined = await ContentMinerAgent(llm, prompts, settings).mine(transcript)
     await ChannelTeaserAgent(llm, prompts, settings).write(transcript, mined.atoms)
-    assert llm.calls[0]["max_tokens"] == 800
+    assert llm.calls[0]["max_tokens"] == 1500
     assert llm.calls[-1]["max_tokens"] == 400
     assert "TRANSCRIPT OPENING" not in llm.calls[-1]["user"]

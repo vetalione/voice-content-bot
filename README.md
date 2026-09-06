@@ -435,7 +435,7 @@ The pipeline uses separate output caps (the legacy `GROQ_LLM_MAX_TOKENS` only
 applies to direct client calls without a stage budget):
 
 ```env
-GROQ_EXTRACTION_MAX_TOKENS=800
+GROQ_EXTRACTION_MAX_TOKENS=1500
 GROQ_MINING_MAX_TOKENS=1200
 GROQ_TEASER_MAX_TOKENS=400
 GROQ_THREADS_MAX_TOKENS=1200
@@ -463,14 +463,15 @@ atoms, without resending the transcript opening. Large custom prompts can still
 exceed the budget; shorten them if the local size guard reports an error.
 
 GPT-OSS requests use `reasoning_effort=low` to preserve the small response budget.
-Mining now has two stages. Extraction uses an 800-token output cap and only five
+Mining now has two stages. Extraction uses a 1500-token output cap and only five
 fields per atom: title, start_seconds, end_seconds, idea, type. At most six atoms
 are accepted per text window (up to two minutes, at most 15 seconds overlap).
 Enrichment scores/classifies one atom per request; its excerpt is drawn locally
 from the existing transcript. `GROQ_MINING_MAX_TOKENS` now caps enrichment only.
 
 A generation failure waits at least 60 seconds (longer if provider reset/retry
-headers demand it), retries the same text once, then splits that text once into
+headers demand it), retries the same text once with a 1600-token output cap through TPM admission,
+then splits that text once into
 two segment-aligned halves. Each half is attempted once; there is no recursive
 split cascade. This recovery never downloads or transcribes audio again.
 
@@ -491,10 +492,17 @@ usage after failed generations; they do not establish monetary billing for them.
 
 Extraction, enrichment, teaser, Threads and Reels use strict schemas with
 `openai/gpt-oss-120b`. No paid provider/tier is enabled. Redeploy to activate;
-`GROQ_EXTRACTION_MAX_TOKENS` is optional and defaults to 800 (range 700–900).
+`GROQ_EXTRACTION_MAX_TOKENS` is optional and defaults to 1500 (accepted range 700–1600 for legacy overrides).
 
 TPM waits log their remaining delay at most every 10 seconds while the process
 is running. Background jobs log a heartbeat every 30 seconds and cancel the
 heartbeat on completion/failure. A healthy `/health` with `running: 1` alone does
 not prove that a job is advancing; use these logs to distinguish an active wait
 from a stopped/restarted process or a stalled request.
+
+If Render already sets `GROQ_EXTRACTION_MAX_TOKENS=800`, change that override to
+1500; otherwise the new default applies on redeploy. `/health` now includes safe
+worker await-chain diagnostics, process ID and uptime. It never exposes coroutine
+locals, messages or tokens. These diagnostics distinguish pending workers from
+cancelled tasks and process restarts; they do not by themselves prove the cause
+of missing logs.

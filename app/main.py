@@ -84,6 +84,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "missing_env": settings.missing_required(),
             "startup_error": startup_error,
             "ffmpeg": bool(container and container.audio.ffmpeg_available),
+            "worker_diagnostics": container.runner.diagnostics() if container else None,
             "queue": {
                 "queued": stats.queued if stats else 0,
                 "running": stats.running if stats else 0,

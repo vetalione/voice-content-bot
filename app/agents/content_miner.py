@@ -175,12 +175,12 @@ class ContentMinerAgent(StructuredAgent):
         )
         return ContentAtomSet(atoms=deduped, notes="\n".join(notes)[:2000])
 
-    async def _extract(self, window, system, user, attempt):
+    async def _extract(self, window, system, user, attempt, output_budget=None):
         result = await self.request(
             AtomExtraction,
             system=system,
             user=user,
-            max_tokens=self.settings.groq_extraction_max_tokens,
+            max_tokens=output_budget or self.settings.groq_extraction_max_tokens,
             request_label=f"content_extraction/window={window.index + 1}:{window.label}/attempt={attempt}",
             repair_attempts=1,
         )
@@ -194,11 +194,12 @@ class ContentMinerAgent(StructuredAgent):
         # cooldown before each subsequent attempt. No audio/STT work occurs here.
         for attempt in (1, 2):
             try:
-                return (await self._extract(window, system, user, attempt)).atoms
+                budget = self.settings.groq_extraction_max_tokens if attempt == 1 else 1600
+                return (await self._extract(window, system, user, attempt, budget)).atoms
             except GroqGenerationError:
                 if attempt == 1:
                     logger.warning(
-                        "Extraction window %s failed; retry once through TPM scheduler",
+                        "Extraction window %s failed; retry same text once with output_budget=1600 through TPM scheduler",
                         window.label,
                     )
         if len(window.segments) < 2:

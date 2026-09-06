@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -54,11 +55,42 @@ class JobRunner:
         self._workers: list[asyncio.Task[None]] = []
         self._stats = RunnerStats()
         self._running = False
+        self._created_at = time.monotonic()
 
     @property
     def stats(self) -> RunnerStats:
         self._stats.queued = self._queue.qsize()
         return self._stats
+
+    def diagnostics(self) -> dict:
+        """Safe live task locations: no messages, credentials or coroutine locals."""
+
+        def describe(task):
+            chain = []
+            current = task.get_coro()
+            for _ in range(16):
+                if current is None:
+                    break
+                code = getattr(current, "cr_code", getattr(current, "gi_code", None))
+                chain.append(code.co_name if code else type(current).__name__)
+                current = getattr(current, "cr_await", getattr(current, "gi_yieldfrom", None))
+            return {
+                "name": task.get_name(),
+                "done": task.done(),
+                "cancelled": task.cancelled(),
+                "await_chain": chain,
+            }
+
+        tasks = [
+            task
+            for task in asyncio.all_tasks()
+            if task.get_name().startswith(("job-worker-", "job-heartbeat-"))
+        ]
+        return {
+            "pid": os.getpid(),
+            "uptime_seconds": round(time.monotonic() - self._created_at, 1),
+            "tasks": [describe(task) for task in tasks],
+        }
 
     async def start(self) -> None:
         if self._running:
@@ -127,7 +159,9 @@ class JobRunner:
                     job.name,
                     started - job.submitted_at,
                 )
-                heartbeat = asyncio.create_task(self._heartbeat(job.name, started))
+                heartbeat = asyncio.create_task(
+                    self._heartbeat(job.name, started), name=f"job-heartbeat-{index}"
+                )
                 try:
                     await job.run()
                     self._stats.completed += 1
