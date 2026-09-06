@@ -506,3 +506,10 @@ worker await-chain diagnostics, process ID and uptime. It never exposes coroutin
 locals, messages or tokens. These diagnostics distinguish pending workers from
 cancelled tasks and process restarts; they do not by themselves prove the cause
 of missing logs.
+
+Structured generation errors now receive one retry through the shared TPM
+scheduler in enrichment, teaser, Threads and Reels, not just extraction. Budgets
+and strict schemas are unchanged; invalid schema/authentication errors are never
+retried as generation failures. Extraction keeps its existing dedicated retry
+and text reduction policy. If both attempts fail, the job still reports failure;
+this does not guarantee provider availability or silently discard an atom.

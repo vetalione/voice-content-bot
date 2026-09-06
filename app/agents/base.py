@@ -18,7 +18,7 @@ from typing import Any, Protocol, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from app.config import Settings
-from app.services.groq_client import GroqError
+from app.services.groq_client import GroqError, GroqGenerationError
 from app.services.prompts import PromptLibrary
 from app.services.token_budget import request_tokens
 
@@ -190,6 +190,15 @@ class StructuredAgent:
                     max_tokens=max_tokens,
                     label=f"{request_label or self.name}#{attempt}",
                 )
+            except GroqGenerationError:
+                if attempt >= repair_attempts:
+                    raise
+                logger.warning(
+                    "%s: structured generation failed on attempt %s; retry through TPM scheduler",
+                    request_label or self.name,
+                    attempt,
+                )
+                continue
             except GroqError:
                 raise  # quota/network problems are not repairable by re-prompting
             try:
