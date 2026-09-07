@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -162,11 +163,18 @@ class OpenRouterClient:
                 body.get("max_tokens", "provider_default"),
                 self.settings.openrouter_reasoning_effort,
             )
-            response = await self.client.post(
-                "/chat/completions",
-                json=body,
-                headers={"Authorization": f"Bearer {self.settings.openrouter_api_key}"},
-            )
+            started = time.monotonic()
+            try:
+                response = await self.client.post(
+                    "/chat/completions",
+                    json=body,
+                    headers={"Authorization": f"Bearer {self.settings.openrouter_api_key}"},
+                )
+            finally:
+                logger.info(
+                    "LLM HTTP timing provider=openrouter stage=%s model=%s attempt=%s elapsed_seconds=%.2f",
+                    label, target, attempt_count, time.monotonic() - started,
+                )
             try:
                 raw = response.json()
             except ValueError as error:
@@ -253,9 +261,14 @@ class OpenRouterClient:
                     code = int(code)
                 if code == 429 or code in {500, 502, 503, 504}:
                     delay = retry_after(response.headers)
+                    # Only free routing retains the conservative quota wait.
+                    # Paid endpoints use bounded exponential backoff when the
+                    # server provides no Retry-After; successful calls never wait.
+                    if code == 429 and delay is None and is_free_model(target):
+                        delay = 60
                     raise RetryableError(
                         f"{label}: OpenRouter {code}: {message}",
-                        retry_after=60 if code == 429 and delay is None else delay,
+                        retry_after=delay,
                     )
                 if code in {400, 422} and (err.get("code") == "json_validate_failed"):
                     raise LLMGenerationError(f"{label}: OpenRouter JSON generation failed", code)

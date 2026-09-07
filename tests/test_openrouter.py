@@ -79,6 +79,74 @@ async def test_structured_success_auth_routed_model_and_summary(or_settings, cap
     assert "some/free-routed-model" in caplog.text
     assert "reasoning_tokens=10" in caplog.text and "reported_cost=0" in caplog.text
     assert "duration_seconds=60" in caplog.text
+    assert "LLM HTTP timing provider=openrouter" in caplog.text
+    assert "elapsed_seconds=" in caplog.text
+
+
+@pytest.mark.parametrize("model", ["openrouter/free", "moonshotai/kimi-k2.5"])
+async def test_successive_calls_never_wait_or_use_groq_tpm(or_settings, monkeypatch, model):
+    from unittest.mock import AsyncMock
+
+    sleep = AsyncMock(side_effect=AssertionError("Successful OpenRouter calls must not sleep"))
+    reserve = AsyncMock(side_effect=AssertionError("OpenRouter must not use Groq TPM"))
+
+    async def retry(operation, **kwargs):
+        return await retry_async(operation, **kwargs, sleep=sleep)
+
+    monkeypatch.setattr("app.services.openrouter_client.retry_async", retry)
+    monkeypatch.setattr("app.services.tpm.RollingTPM.reserve", reserve)
+    configured = or_settings.model_copy(update={
+        "openrouter_model": model, "openrouter_allow_paid": True, "groq_tpm_limit": 1,
+    })
+    async with httpx.AsyncClient(
+        base_url="https://openrouter.ai/api/v1",
+        transport=httpx.MockTransport(lambda req: completion('{"ok":true}')),
+    ) as http:
+        client = OpenRouterClient(configured, http)
+        with recording_usage(60, "no-delays") as usage:
+            assert await client.chat_json(system="s", user="u") == {"ok": True}
+            assert await client.chat_text(system="s", user="u") == '{"ok":true}'
+            assert usage.requests == 2
+    sleep.assert_not_awaited()
+    reserve.assert_not_awaited()
+
+
+@pytest.mark.parametrize("model,header,expected", [
+    ("moonshotai/kimi-k2.5", None, [5, 10]),
+    ("moonshotai/kimi-k2.5", "125", [125, 125]),
+    ("openrouter/free", None, [60, 60]),
+])
+async def test_quota_wait_depends_on_model_and_server_hint(
+    or_settings, monkeypatch, model, header, expected
+):
+    waits, seen = [], []
+
+    async def sleep(delay):
+        waits.append(delay)
+
+    async def retry(operation, **kwargs):
+        return await retry_async(operation, **kwargs, sleep=sleep)
+
+    monkeypatch.setattr("app.services.openrouter_client.retry_async", retry)
+    monkeypatch.setattr("app.utils.retry.random.uniform", lambda *args: 0)
+
+    def handler(req):
+        seen.append(req)
+        return httpx.Response(
+            429, headers={"retry-after": header} if header else {},
+            json={"error": {"message": "rate limited"}},
+        )
+
+    configured = or_settings.model_copy(update={
+        "openrouter_model": model, "openrouter_allow_paid": True,
+    })
+    async with httpx.AsyncClient(
+        base_url="https://openrouter.ai/api/v1", transport=httpx.MockTransport(handler)
+    ) as http:
+        with pytest.raises(LLMError, match="retries exhausted"):
+            await OpenRouterClient(configured, http).chat_text(system="s", user="u")
+    assert len(seen) == 3
+    assert waits == expected
 
 
 @pytest.mark.parametrize("bad", ["not json", '{"teaser":', "[]", '{"teaser":""}'])

@@ -117,7 +117,11 @@ explanations are plain text following SKIP:, rather than JSON metadata. Unreques
 scores are left absent rather than displayed as a fictitious 0/10. Invalid configuration/auth errors do not
 silently downgrade. Invalid JSON repair is bounded to one retry; a length/truncation error is reported
 without retrying an identical request; API 429 honors
-Retry-After with at most two retries by default. Successful structured requests
+Retry-After with at most two retries by default. Without a server hint, paid models
+back off for about 5 then 10 seconds (plus jitter); free models retain a 60-second
+quota wait. Successful text requests have no artificial pause or Groq TPM admission.
+`LLM HTTP timing` logs measure each OpenRouter HTTP attempt, separately from retry
+waits logged as `retrying in`. Whisper retry handling is unchanged. Successful structured requests
 are checkpointed, so repairs/resumes do not redo completed stages.
 
 Reasoning is stage-specific: medium for extraction/merge/audit, low for writers.
@@ -252,6 +256,30 @@ the corresponding LLM cache. Ignored legacy stage token values do not.
 
 After a crash/redeploy, reforward the recording or run the private reanalysis CLI.
 The queue itself is not durable and does not auto-requeue lost pending jobs.
+
+For a temporary Render Free test, an external awake computer can check `/health`
+every five minutes with `python scripts/watch_health.py --url https://YOUR-SERVICE.onrender.com/health`.
+Run this outside Render. The monitor does not prevent other restarts, survive
+computer sleep, or restore lost jobs. Stop its process when no longer needed.
+For cloud checks independent of that computer, manually run
+[scripts/render_health_cron.sql](scripts/render_health_cron.sql) in your Supabase
+SQL Editor. Review the public service URL first. It schedules one named job every
+five minutes through [Supabase Cron](https://supabase.com/docs/guides/cron) and
+`pg_net`; it is not installed by the application or migrations. The application
+service-role key cannot install it through PostgREST. Verify HTTP results after
+installation, not just cron execution status. A paused Supabase project cannot
+perform these checks either.
+
+To finish a private owner recording from Supabase on your computer, use
+`python scripts/resume_private.py --recording ID --primary-model MODEL`.
+Match the original model configuration (`--escalation-model MODEL` and explicit
+`--allow-paid` when applicable). By default this only checks completed caches and
+identifies the next unfinished stage, without generation or delivery. Add `--run`
+to finish and send the private report. It uses the saved transcript directly,
+never calls Whisper, and refuses to regenerate a completed stage when its cache
+does not match current prompts/settings. Do not run concurrently with Render
+processing the same recording. This CLI is manual recovery, not automatic requeue.
+
 Interrupted in-flight API calls may have been charged before a response was saved;
 no system can reconstruct their result from this checkpoint. A crash between a
 Telegram publication and saving its marker can still duplicate that publication.

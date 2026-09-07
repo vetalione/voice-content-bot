@@ -87,19 +87,6 @@ class RecordingProcessor:
 
     async def _deliver(self, request: JobRequest, result: PipelineResult) -> None:
         await self._delivery.send_owner_html(render_report(result))
-        if result.semantic:
-            import json
-
-            archive = {
-                "recording_id": result.recording_id,
-                "semantic": result.semantic.model_dump(mode="json"),
-                "usage": result.usage_diagnostics,
-            }
-            await self._delivery.send_owner_document(
-                f"semantic-{request.message_id}.json",
-                json.dumps(archive, ensure_ascii=False, indent=2).encode(),
-                caption="Все мысли, связи и диагностика; архивные атомы сохранены.",
-            )
 
         if self._settings.enable_full_transcript and result.transcript_text:
             filename = f"transcript-{request.mode.value}-{request.message_id}.txt"
