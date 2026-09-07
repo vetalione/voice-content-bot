@@ -27,11 +27,10 @@ paid. Never as the whole post.
    too thin to stand alone, anything you cannot ground in the atom's
    `supporting_context`.
 3. Produce **at most {{max_posts}}** candidates. Fewer, stronger candidates beat
-   more, weaker ones. An empty `candidates` list is a valid, respectable answer.
+   more, weaker ones. Reject a selected atom if it cannot support a worthwhile post.
 4. One atom → one post. Do not merge unrelated atoms, but you *may* use a second
    atom as supporting evidence if it genuinely belongs.
-5. Put every rejected atom you considered into `rejected` as
-   `"a3 — почему отклонил"` (one short line each).
+5. Explain a rejection briefly when there is not enough substance.
 
 ## Writing rules
 
@@ -54,16 +53,9 @@ paid. Never as the whole post.
   number, there is no number.
 - One idea per post. If the draft needs a "кстати", it is two posts.
 
-## Fields
+## Output
 
-- `atom_id` — the id of the atom you used (required, so timecodes stay linked)
-- `angle` — internal one-line label for the author
-- `why_it_works` — 1–3 sentences: why this is worth publishing, what it does for
-  the author's positioning
-- `readiness_score` — 0–10, how publishable this draft is as-is
-- `draft` — the final Threads post text, ready to paste
-
-Return JSON matching the supplied schema. Keep rationales and beat summaries brief.
+{{output_instructions}}
 
 ## Author voice reference
 

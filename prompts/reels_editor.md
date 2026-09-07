@@ -17,15 +17,15 @@ One long recording can legitimately produce several completely different Reels.
 ## Selection
 
 1. **Do not force every atom into a Reel.** Select only genuinely usable ones.
-2. Produce **at most {{max_reels}}**. An empty `candidates` list is valid.
+2. Produce **at most {{max_reels}}**. Reject a selected atom if it cannot support a worthwhile script.
 3. A usable Reel needs one of: tension, a turn, a concrete scene, a number that
    surprises, or an opinion someone would argue with. A neutral explanation is
    not a Reel.
-4. Put atoms you considered and dropped into `rejected` as `"a4 — причина"`.
+4. Explain a rejection briefly when there is not enough substance.
 
 ## Structure
 
-Each Reel is built from beats, then written out as one continuous script:
+Plan the following beats internally, then write one continuous script:
 
 - `hook` — the first 1–2 seconds of speech. It must earn attention immediately:
   a concrete image, a stake, a contradiction, a mid-action opening. No "привет,
@@ -55,11 +55,8 @@ Each Reel is built from beats, then written out as one continuous script:
 - Keep the author's own vivid phrasing when it exists.
 - Forbidden: motivational tone, "лайфхак", listicle narration ("три причины,
   почему..."), generic AI phrasing, third-person self-description.
-- `concept` is an internal title for the author. `why_it_works` is 1–3 sentences
-  on the mechanism — why this holds attention.
-- `score` is 0–10 for expected performance.
 
-Return JSON matching the supplied schema. Keep rationales and beat summaries brief.
+{{output_instructions}}
 
 ## Author voice reference
 

@@ -24,7 +24,7 @@ class TeaserTimestamp(BaseModel):
 class ChannelTeaser(BaseModel):
     """The editorial teaser published under the original channel post."""
 
-    teaser: str = Field(min_length=1, max_length=1500)
+    teaser: str = Field(min_length=1)
     timestamps: list[TeaserTimestamp] = Field(default_factory=list)
     reasoning: str = Field(default="", max_length=1000)
 
@@ -50,8 +50,8 @@ class ThreadsCandidate(BaseModel):
     end_seconds: float = Field(default=0.0, ge=0.0)
     angle: str = Field(default="", max_length=200, description="Internal label.")
     why_it_works: str = Field(default="", max_length=1200)
-    readiness_score: float = Field(default=0.0, ge=0.0, le=10.0)
-    draft: str = Field(min_length=1, max_length=4000)
+    readiness_score: float | None = Field(default=None, ge=0.0, le=10.0)
+    draft: str = Field(min_length=1)
 
     @property
     def timecode(self) -> str:
@@ -63,7 +63,7 @@ class ThreadsBatch(BaseModel):
     rejected: list[str] = Field(default_factory=list, description="Short notes on discarded atoms.")
 
     def best(self, limit: int) -> list[ThreadsCandidate]:
-        ordered = sorted(self.candidates, key=lambda item: item.readiness_score, reverse=True)
+        ordered = sorted(self.candidates, key=lambda item: item.readiness_score or 0, reverse=True)
         return ordered[:limit]
 
 
@@ -75,7 +75,7 @@ class ReelsCandidate(BaseModel):
     end_seconds: float = Field(default=0.0, ge=0.0)
     concept: str = Field(min_length=1, max_length=200)
     why_it_works: str = Field(default="", max_length=1200)
-    score: float = Field(default=0.0, ge=0.0, le=10.0)
+    score: float | None = Field(default=None, ge=0.0, le=10.0)
     target_duration_seconds: int = Field(default=60, ge=10, le=300)
     hook: str = Field(default="", max_length=600)
     setup: str = Field(default="", max_length=1200)
@@ -83,7 +83,7 @@ class ReelsCandidate(BaseModel):
     payoff: str = Field(default="", max_length=1500)
     ending: str = Field(default="", max_length=800)
     on_screen_text: list[str] = Field(default_factory=list)
-    script: str = Field(min_length=1, max_length=5000)
+    script: str = Field(min_length=1)
 
     @field_validator("on_screen_text", mode="before")
     @classmethod
@@ -106,7 +106,7 @@ class ReelsBatch(BaseModel):
     rejected: list[str] = Field(default_factory=list)
 
     def best(self, limit: int) -> list[ReelsCandidate]:
-        ordered = sorted(self.candidates, key=lambda item: item.score, reverse=True)
+        ordered = sorted(self.candidates, key=lambda item: item.score or 0, reverse=True)
         return ordered[:limit]
 
 

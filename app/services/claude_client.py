@@ -18,8 +18,22 @@ class ClaudeAgentClient:
     async def aclose(self):
         pass
 
-    async def chat_json(
-        self, *, system, user, schema=None, schema_name="response", label="claude", **kwargs
+    async def chat_json(self, **kwargs):
+        return await self._chat(structured=True, **kwargs)
+
+    async def chat_text(self, **kwargs):
+        return await self._chat(structured=False, **kwargs)
+
+    async def _chat(
+        self,
+        *,
+        system,
+        user,
+        schema=None,
+        schema_name="response",
+        label="claude",
+        structured=True,
+        **kwargs,
     ):
         s = self.settings
         if not s.claude_enabled or not s.claude_model or not s.claude_code_oauth_token:
@@ -59,13 +73,19 @@ class ClaudeAgentClient:
                 max_turns=2,
                 max_budget_usd=s.claude_max_budget_usd,
                 effort="medium",
-                output_format={"type": "json_schema", "schema": schema} if schema else None,
+                output_format={"type": "json_schema", "schema": schema}
+                if structured and schema
+                else None,
                 env={
                     **clean,
                     "CLAUDE_CODE_OAUTH_TOKEN": s.claude_code_oauth_token,
                     "CLAUDE_CONFIG_DIR": directory,
                     "CLAUDE_CODE_MAX_RETRIES": "1",
-                    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(kwargs.get("max_tokens") or 8000),
+                    **(
+                        {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(s.openrouter_max_output_tokens)}
+                        if s.openrouter_max_output_tokens
+                        else {}
+                    ),
                 },
                 stderr=lambda _: None,
             )
@@ -95,6 +115,11 @@ class ClaudeAgentClient:
                             if getattr(message, "is_error", False):
                                 raise LLMError(f"Claude SDK result: {message.subtype}")
                             value = getattr(message, "structured_output", None)
+                            if not structured:
+                                text = getattr(message, "result", None)
+                                if isinstance(text, str) and text.strip():
+                                    return text.strip()
+                                raise LLMGenerationError("Claude SDK returned empty text")
                             if isinstance(value, dict):
                                 return value
                             raise LLMGenerationError(

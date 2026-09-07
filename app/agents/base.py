@@ -5,8 +5,8 @@ Each agent is a thin object that:
   2. asks the selected text provider for a JSON object constrained by the target Pydantic schema,
   3. validates the result, retrying once with the validation error attached.
 
-No agent parses free text with regex; the contract between stages is always a
-Pydantic model.
+Machine-readable stages validate JSON. Writers can keep plain text in the same
+persistent stage store, with source links assigned locally.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from typing import Any, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from app.config import Settings
-from app.services.llm import LLMClient, LLMError, LLMGenerationError
+from app.services.llm import LLMClient, LLMError, LLMGenerationError, LLMTruncationError
 from app.services.prompts import PromptLibrary
 from app.services.token_budget import request_tokens
 
@@ -110,6 +110,17 @@ class StructuredAgent:
     def system_prompt(self, **values: object) -> str:
         """Render the agent's prompt file, always exposing the voice guide."""
         values.setdefault("voice_style", self._prompts.voice_style(self.name))
+        values.setdefault(
+            "output_instructions",
+            (
+                "Return only the finished Russian text, ready to use. No JSON, code fences, "
+                "field names or editorial explanation. If a selected atom cannot support a draft, "
+                "return SKIP: followed by a brief editorial explanation instead of inventing content."
+                if self.settings.text_provider == "openrouter"
+                else "Return JSON matching the supplied schema. Include the draft/script, source atom_id, "
+                "editorial rationale, scores and rejected items in their schema fields."
+            ),
+        )
         return self._prompts.render(self.prompt_file, **values)
 
     async def request_atom_batches(
@@ -131,14 +142,8 @@ class StructuredAgent:
             user = render_atoms(batch, related_atoms=source_atoms)
             estimate = request_tokens(system, user, json_schema_for(response_model))
             if (
-                estimate + max_tokens > self.settings.groq_tpm_limit
-                if self.settings.text_provider == "groq"
-                else estimate
-                > (
-                    self.settings.semantic_max_input_tokens
-                    if self.settings.semantic_pipeline_enabled
-                    else self.settings.text_max_input_tokens
-                )
+                self.settings.text_provider == "groq"
+                and estimate + max_tokens > self.settings.groq_tpm_limit
             ):
                 if len(batch) == 1:
                     raise LLMError(
@@ -165,6 +170,43 @@ class StructuredAgent:
         rejected = [note for result in results for note in result.rejected]
         return response_model(candidates=candidates, rejected=rejected)
 
+    async def request_text(self, *, system, user, temperature=None, request_label=None):
+        from app.services.checkpoints import active_checkpoint, fingerprint
+
+        label = request_label or self.name
+        context = active_checkpoint.get()
+        key = "llm-text:" + fingerprint(
+            [
+                getattr(self._llm, "cache_identity", type(self._llm).__name__),
+                label,
+                system,
+                user,
+                temperature,
+            ]
+        )
+        if context:
+            cached = await context[0].get(context[1], key)
+            if (
+                cached
+                and cached.get("status") == "complete"
+                and isinstance(cached.get("text"), str)
+                and cached["text"].strip()
+            ):
+                logger.info("Checkpoint hit stage=%s", label)
+                return cached["text"]
+            await context[0].put(context[1], key, {"status": "running", "stage": label})
+        text = await self._llm.chat_text(
+            system=system, user=user, temperature=temperature, label=label
+        )
+        if not isinstance(text, str) or not text.strip():
+            raise LLMGenerationError(f"{label}: empty editorial response")
+        text = text.strip()
+        if context:
+            await context[0].put(
+                context[1], key, {"status": "complete", "stage": label, "text": text}
+            )
+        return text
+
     async def request(
         self,
         response_model: type[ModelT],
@@ -178,6 +220,8 @@ class StructuredAgent:
     ) -> ModelT:
         from app.services.checkpoints import active_checkpoint, fingerprint
 
+        if self.settings.text_provider == "openrouter":
+            max_tokens = None  # old stage env vars must not affect requests/cache keys
         context = active_checkpoint.get()
         cache_key = "llm:" + fingerprint(
             [
@@ -213,6 +257,8 @@ class StructuredAgent:
                     max_tokens=max_tokens,
                     label=f"{request_label or self.name}#{attempt}",
                 )
+            except LLMTruncationError:
+                raise  # identical re-prompting cannot lift an upstream completion limit
             except LLMGenerationError:
                 if attempt >= repair_attempts:
                     raise
@@ -223,9 +269,9 @@ class StructuredAgent:
                 )
                 if self.settings.text_provider == "openrouter":
                     attempt_user = (
-                        f"{user}\n\nThe previous response was invalid or truncated. "
+                        f"{user}\n\nThe previous response was invalid. "
                         "Return one complete JSON object matching the required schema. "
-                        "Keep text concise and use fewer items if necessary to fit the output budget."
+                        "Preserve all distinct ideas and relationships."
                     )
                     if self.settings.semantic_pipeline_enabled:
                         attempt_user += " Preserve omissions using overflow=true and specific overflow_hints where the schema supports them; never silently discard distinct ideas."

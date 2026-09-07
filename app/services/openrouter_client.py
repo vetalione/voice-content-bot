@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 
 from app.config import Settings
-from app.services.llm import LLMError, LLMGenerationError
+from app.services.llm import LLMError, LLMGenerationError, LLMTruncationError
 from app.services.token_budget import request_tokens
 from app.services.usage import current_usage
 from app.utils.retry import RetryableError, retry_async
@@ -49,6 +49,8 @@ class OpenRouterClient:
             settings.openrouter_model,
             settings.openrouter_reasoning_effort,
             sorted(supported_parameters or []),
+            "provider-completion-v2",
+            settings.openrouter_max_output_tokens,
         ]
         self.supported_parameters = supported_parameters
         self._check_model(settings.openrouter_model)
@@ -67,7 +69,13 @@ class OpenRouterClient:
         if self._own_client:
             await self.client.aclose()
 
-    async def chat_json(
+    async def chat_json(self, **kwargs) -> dict[str, Any]:
+        return await self._chat(structured=True, **kwargs)
+
+    async def chat_text(self, **kwargs) -> str:
+        return await self._chat(structured=False, **kwargs)
+
+    async def _chat(
         self,
         *,
         system: str,
@@ -78,16 +86,13 @@ class OpenRouterClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
         label="chat",
-    ) -> dict[str, Any]:
+        structured=True,
+    ):
         target = model or self.settings.openrouter_model
         self._check_model(target)
         if not self.settings.openrouter_api_key:
             raise LLMError("OPENROUTER_API_KEY is missing")
         input_estimate = request_tokens(system, user, schema)
-        if input_estimate > self.settings.text_max_input_tokens:
-            raise LLMError(
-                f"{label}: text input exceeds TEXT_MAX_INPUT_TOKENS; shorten/split input"
-            )
         # The free router performs feature selection itself. Its own parameter
         # metadata omits reasoning; requiring it there rejects otherwise valid
         # routed requests before they reach a model. Keep strict JSON and local
@@ -99,17 +104,22 @@ class OpenRouterClient:
             "model": target,
             "provider": provider,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            "max_tokens": max_tokens or 2000,
             "reasoning": (
                 {"effort": "none", "enabled": False}
                 if self.settings.openrouter_reasoning_effort == "none"
                 else {"effort": self.settings.openrouter_reasoning_effort}
             ),
         }
+        # Per-stage max_tokens is a legacy interface argument, deliberately ignored.
+        # Input tokens never consume this completion-only ceiling.
+        if self.settings.openrouter_max_output_tokens is not None:
+            body["max_tokens"] = self.settings.openrouter_max_output_tokens
         # Use OpenRouter's unified control, not Groq-specific reasoning_effort.
         # exclude=true would only hide reasoning; it would still consume the budget.
         # Keep this control even during compatibility fallback and retries.
-        if schema and (
+        if not structured:
+            schema = None
+        elif schema and (
             self.supported_parameters is None or "structured_outputs" in self.supported_parameters
         ):
             body["response_format"] = {
@@ -149,7 +159,7 @@ class OpenRouterClient:
                 target,
                 count,
                 input_estimate,
-                body["max_tokens"],
+                body.get("max_tokens", "provider_default"),
                 self.settings.openrouter_reasoning_effort,
             )
             response = await self.client.post(
@@ -295,14 +305,18 @@ class OpenRouterClient:
                 len(content) if isinstance(content, str) else 0,
             )
             if choice.get("finish_reason") == "length":
-                raise LLMGenerationError(
+                raise LLMTruncationError(
                     f"{label}: OpenRouter output truncated (model={raw.get('model')}, "
-                    f"output_budget={body['max_tokens']}, "
+                    f"output_budget={body.get('max_tokens', 'provider_default')}, "
                     f"reasoning_effort={self.settings.openrouter_reasoning_effort})"
                 )
             if not isinstance(content, str):
                 raise ValueError("missing text")
             text = content.strip()
+            if not structured:
+                if not text:
+                    raise LLMGenerationError(f"{label}: OpenRouter returned empty text")
+                return text
             if text.startswith("```"):
                 text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
             parsed = json.loads(text)

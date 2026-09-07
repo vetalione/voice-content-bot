@@ -13,7 +13,12 @@ class LLMGenerationError(LLMError):
     pass
 
 
+class LLMTruncationError(LLMGenerationError):
+    """Provider hit its completion limit; repeating the same request is not a repair."""
+
+
 class LLMClient(Protocol):
+    async def chat_text(self, *, system: str, user: str, **kwargs) -> str: ...
     async def chat_json(
         self,
         *,

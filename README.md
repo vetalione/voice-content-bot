@@ -68,7 +68,7 @@ The semantic pipeline is:
 6. Optional one quality audit, selected by explicit rules below. Never run both
    Kimi escalation and Claude audits automatically on one recording.
 7. Route **all** finalized atoms to THREADS, REELS, BOTH or ARCHIVE_ONLY.
-8. Generate one teaser from the finalized understanding. Select at most four atoms
+8. Generate one plain-text teaser from the finalized understanding. Select at most four atoms
    each for Threads/Reels; writers receive relevant supporting atoms, implications,
    relationships, source excerpts and the editable voice guide.
 
@@ -99,17 +99,36 @@ another model. A more expensive fallback, or one whose price cannot be compared
 with a missing primary, requires explicit escalation permission. Escalation is not
 itself a primary fallback. There is no random free fallback.
 
+Extraction, metadata/relationship patches, coverage patches and routing use machine-readable JSON.
 Model capabilities select strict JSON schema, JSON Object Mode, or prompted JSON
-in that order. Pydantic always validates. Invalid configuration/auth errors do not
-silently downgrade. Generation repair is bounded to one retry; API 429 honors
+for these stages; Pydantic validates the result. Teasers, Threads drafts and Reels
+scripts use ordinary text responses, with no response_format or JSON repair.
+One selected atom produces one draft; source IDs/times and optional teaser timestamps
+are assigned locally. Drafts are not parsed into rigid beat fields. Rejection
+explanations are plain text following SKIP:, rather than JSON metadata. Unrequested
+scores are left absent rather than displayed as a fictitious 0/10. Invalid configuration/auth errors do not
+silently downgrade. Invalid JSON repair is bounded to one retry; a length/truncation error is reported
+without retrying an identical request; API 429 honors
 Retry-After with at most two retries by default. Successful structured requests
 are checkpointed, so repairs/resumes do not redo completed stages.
 
 Reasoning is stage-specific: medium for extraction/merge/audit, low for writers.
 If the catalog advertises a narrower effort set, use supported low instead of
 silently increasing to maximum (K3 currently lists max/high/low). Unsupported
-reasoning controls are omitted for non-reasoning models. Output caps include
-reasoning; defaults are larger than in the old free-tier experiment.
+reasoning controls are omitted for non-reasoning models. Reasoning quality is not
+reduced to squeeze a response into an old Groq-Free token budget.
+
+OpenRouter requests omit `max_tokens` by default so the model/provider chooses
+its completion limit. Input tokens do **not** subtract from a completion limit:
+reasoning and the visible answer share that output limit; input plus output must
+fit the model's context. There is no OpenRouter TPM scheduler, headroom reservation,
+local approximate input cap, or recursive splitting to satisfy old token env vars.
+The provider still enforces its own context/output/quota limits.
+
+For an explicit safety ceiling, set only `OPENROUTER_MAX_OUTPUT_TOKENS=32768` (or
+your chosen value). This single optional value applies to every OpenRouter request.
+Omit the variable to use provider defaults. Existing per-stage token settings may
+remain on Render; they have no effect on OpenRouter. No new env variable is required.
 
 ## Exact configuration / Render migration
 
@@ -138,8 +157,6 @@ EXTRACTION_WINDOW_MINUTES=12
 EXTRACTION_OVERLAP_MINUTES=2
 TARGET_ATOM_LIMIT=10
 OVERFLOW_MAX_PASSES=2
-SEMANTIC_MAX_INPUT_TOKENS=90000
-SEMANTIC_MAX_OUTPUT_TOKENS=8000
 SEMANTIC_REASONING_EFFORT=medium
 WRITING_REASONING_EFFORT=low
 ESCALATE_IF_DURATION_MINUTES=30
@@ -148,9 +165,6 @@ MAX_THREADS_CANDIDATES=4
 MAX_REELS_CANDIDATES=4
 THREADS_BATCH_SIZE=2
 REELS_BATCH_SIZE=2
-TEXT_TEASER_MAX_TOKENS=1800
-TEXT_THREADS_MAX_TOKENS=5000
-TEXT_REELS_MAX_TOKENS=6000
 OPENROUTER_TIMEOUT_SECONDS=180
 OPENROUTER_MAX_RETRIES=2
 OPENROUTER_MAX_REQUESTS_PER_RECORDING=60
@@ -173,8 +187,9 @@ Obsolete on the semantic path: `OPENROUTER_MODEL`, `OPENROUTER_REASONING_EFFORT`
 `GROQ_EXTRACTION_MAX_TOKENS`, `GROQ_MINING_MAX_TOKENS`, `GROQ_TEASER_MAX_TOKENS`,
 `GROQ_THREADS_MAX_TOKENS`, `GROQ_REELS_MAX_TOKENS`, `GROQ_TPM_LIMIT`,
 `GROQ_USE_JSON_SCHEMA`. These remain available to the legacy text path. The
-semantic OpenRouter request budget uses `SEMANTIC_MAX_INPUT_TOKENS`; the legacy
-OpenRouter path still uses `TEXT_MAX_INPUT_TOKENS`.
+OpenRouter path ignores `SEMANTIC_MAX_INPUT_TOKENS`, `SEMANTIC_MAX_OUTPUT_TOKENS`,
+`TEXT_MAX_INPUT_TOKENS` and every per-stage `TEXT_*_MAX_TOKENS`, including when
+using the legacy OpenRouter miner.
 `GROQ_TIMEOUT_SECONDS` and Groq retry settings still apply to Whisper.
 
 ## Exact escalation policy
@@ -224,7 +239,8 @@ status, validated LLM stages, chunk/full transcripts, analysis/results, publicat
 markers and provider usage metadata. Credentials are not checkpointed. Source file
 identity is scoped to chat and private/channel mode. Reforwarding the same private
 file with a new message ID reuses completed work and still never publishes.
-Changed model/prompt/schema/budget inputs invalidate the corresponding LLM cache.
+Changed model/prompt/schema or the optional global completion ceiling invalidates
+the corresponding LLM cache. Ignored legacy stage token values do not.
 
 After a crash/redeploy, reforward the recording or run the private reanalysis CLI.
 The queue itself is not durable and does not auto-requeue lost pending jobs.
@@ -317,38 +333,26 @@ side by side. Use `WRITING_PROVIDER` on a normal recording for explicit writer
 comparison. Production whitelist checks remain upstream of all LLM work; unauthorized
 private users are silently ignored. CLI usage assumes the trusted owner operating it.
 
-## Requests and realistic budget estimates
+## Request count and actual spend
 
-With enough eligible atoms for four drafts of each kind, batches of two, no
-repairs/overflow and normal speech density:
+With four selected drafts per platform, normal window sizing, no overflow/repairs:
 
-| Recording | Extraction windows | Primary calls incl. all writers | Optional premium audit |
+| Recording | Extraction windows | Primary calls including writers | Optional premium audit |
 |---|---:|---:|---:|
-| 5 minutes | 1 | up to 9 | +1 only if triggered/forced |
-| 15 minutes | 2 | up to 10 | +1 only if triggered/forced |
-| 60 minutes | 6 | up to 14 | +1 in default auto mode |
+| 5 minutes | 1 | up to 13 | +1 if triggered |
+| 15 minutes | 2 | up to 14 | +1 if triggered |
+| 60 minutes | 6 | up to 18 | +1 if triggered |
 
-Formula: windows + merge + primary coverage + routing + teaser + 2 Threads + 2 Reels.
-Archive-only content needs fewer writing calls. Overflow can add one extraction
-call/window; JSON repair/HTTP retry increases actual attempts. Short/dense speech
-is not predicted by duration alone. Full transcript is used in global stages when
-within configured/model context. An oversized global input fails clearly with saved
-extraction retained; it is never silently truncated into a supposedly complete audit.
+Formula: windows + merge + primary coverage + routing + teaser + 4 Threads + 4 Reels.
+The one-draft-per-call text format keeps source attribution deterministic without
+asking the model for a structured batch of finished prose. Archive-only atoms
+never receive writing calls. Overflow and bounded retries can add requests; the
+existing per-recording request guard remains protection against retry storms,
+not a token budget. Extraction/dedupe/coverage/routing semantics are unchanged.
 
-An illustrative hourly token assumption is **80k primary input + 14k primary
-output**, plus **32k escalation input + 3.5k escalation output** when K3 audits
-all long recordings. Output includes reasoning. At the verified prices above:
-
-| Voice hours/month | Primary only | Including that K3 audit volume | With 50% planning margin |
-|---|---:|---:|---:|
-| 30 | $2.03 | $6.48 | $9.72 |
-| 45 | $3.04 | $9.72 | $14.58 |
-| 60 | $4.05 | $12.96 | $19.44 |
-
-These are workload assumptions, not measured invoices or a guarantee. Many short
-recordings each requesting eight drafts, dense speech, overflow, long reasoning
-and retries can exceed them. Whisper, hosting and any Claude subscription/extra
-usage are separate. Record real usage before promising $15 at 60 hours/month.
+Use the actual logs and OpenRouter billing to measure monthly spend. No voice-hour
+cost prediction controls completion sizing. Global context is passed intact; native
+provider limits can still reject it, with completed stages preserved for resume.
 
 Every OpenRouter response records configured/actual model, stage, provider, tokens,
 reasoning and returned cost. Per-recording usage is persisted even if JSON validation
@@ -379,8 +383,8 @@ After setting the primary model, key and paid opt-in, run exactly this once:
 
 This reads the public catalog and sends **one extraction request** for a tiny
 synthetic Russian AI-art transcript. No Whisper, Telegram, escalation or retries.
-It caps output at 4,000 tokens; at the captured K2.5 output rate the cap corresponds
-to about $0.009 output plus the small input. It prints extracted claims for human
+It uses the provider completion default (or the one optional global ceiling).
+It prints actual returned usage/cost and extracted claims for human
 recall review. Passing validates one sample, not the whole pipeline or all models.
 No live generation tests were run as part of this migration.
 

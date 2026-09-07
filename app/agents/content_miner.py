@@ -107,7 +107,7 @@ class ContentMinerAgent(StructuredAgent):
             group = []
             used = 0
             cap = (
-                self.settings.text_max_input_tokens - 1000
+                float("inf")
                 if settings.text_provider == "openrouter"
                 else max(1000, settings.groq_tpm_limit - settings.groq_extraction_max_tokens - 1000)
             )

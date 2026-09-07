@@ -34,7 +34,6 @@ async def main():
                 "[60-105] Богатые люди могут начать покупать такие работы именно потому, "
                 "что их ценят агенты: предпочтение агента станет новым сигналом статуса.",
                 request_label="semantic_extraction/smoke",
-                max_tokens=4000,
                 repair_attempts=1,
             )
             print(f"Validated {len(result.atoms)} atoms. Inspect claims:")

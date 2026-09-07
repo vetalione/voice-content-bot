@@ -71,7 +71,12 @@ def render_threads(candidates: list[ThreadsCandidate]) -> str:
     for index, item in enumerate(candidates, start=1):
         parts = [
             f"<b>{index}. {escape(item.angle) or 'без названия'}</b>",
-            f"⏱ {item.timecode}  ·  готовность {item.readiness_score:.0f}/10"
+            f"⏱ {item.timecode}"
+            + (
+                f"  ·  готовность {item.readiness_score:.0f}/10"
+                if item.readiness_score is not None
+                else ""
+            )
             + (f"  ·  <code>{escape(item.atom_id)}</code>" if item.atom_id else ""),
         ]
         if item.why_it_works:
@@ -89,8 +94,9 @@ def render_reels(candidates: list[ReelsCandidate]) -> str:
     for index, item in enumerate(candidates, start=1):
         parts = [
             f"<b>{index}. {escape(item.concept)}</b>",
-            f"⏱ {item.timecode}  ·  {item.score:.0f}/10  ·  "
-            f"~{item.target_duration_seconds} сек"
+            f"⏱ {item.timecode}"
+            + (f"  ·  {item.score:.0f}/10" if item.score is not None else "")
+            + f"  ·  ~{item.target_duration_seconds} сек"
             + (f"  ·  <code>{escape(item.atom_id)}</code>" if item.atom_id else ""),
         ]
         if item.why_it_works:

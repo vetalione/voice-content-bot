@@ -14,6 +14,7 @@ from app.models.atoms import AtomCategory, ContentAtom
 from app.models.content import ReelsBatch, ReelsCandidate
 
 from .base import StructuredAgent
+from .rendering import render_atoms
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,29 @@ class ReelsEditorAgent(StructuredAgent):
         ]
         ranked = rank_for_reels(eligible)[: self.settings.max_reels_candidates]
         limit = self.settings.max_reels_candidates
+        if self.settings.text_provider == "openrouter":
+            batch = ReelsBatch()
+            for atom in ranked:
+                text = await self.request_text(
+                    system=self.system_prompt(max_reels=1),
+                    user=render_atoms([atom], related_atoms=atoms),
+                    temperature=0.85,
+                    request_label=f"{self.name}/atom={atom.id}",
+                )
+                if text.startswith("SKIP:"):
+                    batch.rejected.append(f"{atom.id} — {text[5:].strip()}")
+                    continue
+                batch.candidates.append(
+                    ReelsCandidate(
+                        atom_id=atom.id,
+                        start_seconds=atom.start_seconds,
+                        end_seconds=atom.end_seconds,
+                        concept=atom.label[:200],
+                        script=text,
+                        target_duration_seconds=max(10, min(300, round(len(text.split()) / 2.4))),
+                    )
+                )
+            return batch
         batch = await self.request_atom_batches(
             ReelsBatch,
             ranked,
@@ -90,4 +114,4 @@ class ReelsEditorAgent(StructuredAgent):
                 candidate.start_seconds = atom.start_seconds
                 candidate.end_seconds = atom.end_seconds
             aligned.append(candidate)
-        return sorted(aligned, key=lambda item: item.score, reverse=True)
+        return sorted(aligned, key=lambda item: item.score or 0, reverse=True)

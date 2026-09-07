@@ -14,6 +14,7 @@ from app.models.atoms import ContentAtom
 from app.models.content import ThreadsBatch, ThreadsCandidate
 
 from .base import StructuredAgent
+from .rendering import render_atoms
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,28 @@ class ThreadsEditorAgent(StructuredAgent):
         ]
         ranked = rank_for_threads(eligible)[: self.settings.max_threads_candidates]
         limit = self.settings.max_threads_candidates
+        if self.settings.text_provider == "openrouter":
+            batch = ThreadsBatch()
+            for atom in ranked:
+                text = await self.request_text(
+                    system=self.system_prompt(max_posts=1),
+                    user=render_atoms([atom], related_atoms=atoms),
+                    temperature=0.8,
+                    request_label=f"{self.name}/atom={atom.id}",
+                )
+                if text.startswith("SKIP:"):
+                    batch.rejected.append(f"{atom.id} — {text[5:].strip()}")
+                    continue
+                batch.candidates.append(
+                    ThreadsCandidate(
+                        atom_id=atom.id,
+                        start_seconds=atom.start_seconds,
+                        end_seconds=atom.end_seconds,
+                        angle=atom.label[:200],
+                        draft=text,
+                    )
+                )
+            return batch
         batch = await self.request_atom_batches(
             ThreadsBatch,
             ranked,
@@ -79,4 +102,4 @@ class ThreadsEditorAgent(StructuredAgent):
                 candidate.start_seconds = atom.start_seconds
                 candidate.end_seconds = atom.end_seconds
             aligned.append(candidate)
-        return sorted(aligned, key=lambda item: item.readiness_score, reverse=True)
+        return sorted(aligned, key=lambda item: item.readiness_score or 0, reverse=True)

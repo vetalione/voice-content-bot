@@ -49,7 +49,8 @@ class TextRouter:
         self.clients = {}
         self.health = {"status": "unchecked"}
         self.cache_identity = [
-            "semantic-v1",
+            "semantic-text-v2",
+            settings.openrouter_max_output_tokens,
             settings.openrouter_primary_model,
             settings.openrouter_primary_fallback_model,
             settings.openrouter_escalation_model,
@@ -159,18 +160,24 @@ class TextRouter:
             return None
 
     async def chat_json(self, **kwargs):
+        return await self._chat("chat_json", **kwargs)
+
+    async def chat_text(self, **kwargs):
+        return await self._chat("chat_text", **kwargs)
+
+    async def _chat(self, method, **kwargs):
         writing = kwargs.get("label", "").startswith(
             ("threads_editor", "reels_editor", "channel_teaser")
         )
         return await self.request(
-            self.settings.writing_provider if writing else "primary", **kwargs
+            self.settings.writing_provider if writing else "primary", method=method, **kwargs
         )
 
-    async def request(self, role, **kwargs):
+    async def request(self, role, method="chat_json", **kwargs):
         if role == "claude":
             if not self.claude:
                 raise LLMError("Claude adapter is not enabled")
-            return await self.claude.chat_json(**kwargs)
+            return await getattr(self.claude, method)(**kwargs)
         await self.catalog.refresh()
         target = self._select(role)
         if kwargs.get("model") and kwargs["model"] != target:
@@ -196,15 +203,6 @@ class TextRouter:
                 update={
                     "openrouter_model": target,
                     "openrouter_reasoning_effort": effort,
-                    "text_max_input_tokens": min(
-                        self.settings.semantic_max_input_tokens,
-                        max(
-                            1000,
-                            info.get("context_length", 32000)
-                            - self.settings.semantic_max_output_tokens
-                            - 1000,
-                        ),
-                    ),
                 }
             )
             self.clients[key] = self.factory(
@@ -217,7 +215,7 @@ class TextRouter:
             )
         kwargs["model"] = target
         try:
-            return await self.clients[key].chat_json(**kwargs)
+            return await getattr(self.clients[key], method)(**kwargs)
         except LLMError as error:
             # A missing endpoint is not permission to use the escalation model.
             if error.status_code == 404:
@@ -235,7 +233,7 @@ class TextRouter:
                         self.settings.openrouter_primary_fallback_model,
                     )
                     kwargs.pop("model", None)
-                    return await self.request("fallback", **kwargs)
+                    return await self.request("fallback", method=method, **kwargs)
             raise
 
     async def aclose(self):

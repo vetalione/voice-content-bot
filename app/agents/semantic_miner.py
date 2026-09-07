@@ -19,7 +19,6 @@ from app.models.semantic import (
     SemanticResult,
 )
 from app.services.llm import LLMError
-from app.services.token_budget import approximate_tokens
 from app.utils.text import token_overlap_ratio
 
 logger = logging.getLogger(__name__)
@@ -172,10 +171,6 @@ class SemanticMinerAgent(StructuredAgent):
         if not text:
             text = transcript.text
         value = f"TRANSCRIPT (absolute seconds):\n{text}\n\nCURRENT ATOMS:\n{atom_payload(atoms)}"
-        if approximate_tokens(value) > self.settings.semantic_max_input_tokens - 2500:
-            raise LLMError(
-                "Global semantic input exceeds configured context budget; saved extraction is retained. Increase SEMANTIC_MAX_INPUT_TOKENS within model context or split this recording."
-            )
         return value
 
     async def _stage(self, model, prompt, user, label, llm=None):
@@ -188,7 +183,9 @@ class SemanticMinerAgent(StructuredAgent):
                 voice_style=self.prompts.voice_style("content_router"),
             ),
             user=user,
-            max_tokens=self.settings.semantic_max_output_tokens,
+            max_tokens=None
+            if self.settings.text_provider == "openrouter"
+            else self.settings.semantic_max_output_tokens,
             request_label=label,
         )
 

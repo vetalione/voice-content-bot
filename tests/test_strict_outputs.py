@@ -142,4 +142,6 @@ def test_pydantic_bounds_remain_enforced():
     schema = json_schema_for(ChannelTeaser)
     assert "maxLength" not in schema["properties"]["teaser"]
     with pytest.raises(ValidationError):
-        ChannelTeaser.model_validate({"teaser": "x" * 1501, "timestamps": [], "reasoning": ""})
+        ChannelTeaser.model_validate(
+            {"teaser": "valid", "timestamps": [{"seconds": -1, "label": "invalid source time"}]}
+        )

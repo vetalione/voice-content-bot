@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     openrouter_timeout_seconds: float = Field(default=120, gt=0)
     openrouter_max_retries: int = Field(default=2, ge=0, le=3)
     openrouter_max_requests_per_recording: int = Field(default=60, ge=1, le=100)
+    # Optional single ceiling. None delegates completion sizing to the provider.
+    # Legacy per-stage fields below remain accepted but do not constrain OpenRouter.
+    openrouter_max_output_tokens: int | None = Field(default=None, gt=0)
     text_max_input_tokens: int = Field(default=12000, ge=1000)
     text_extraction_max_tokens: int = Field(default=3000, gt=0)
     text_teaser_max_tokens: int = Field(default=1800, gt=0)

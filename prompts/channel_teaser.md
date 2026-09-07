@@ -37,22 +37,11 @@ editorial voice.
 {{timestamps_policy}}
 
 If you include timestamps: 3–5 lines maximum, each a **short thematic label** of
-2–6 words (not a sentence, no final period). `seconds` must be the numeric
-position in the recording taken from the atoms you were given.
+2–6 words (not a sentence, no final period). Use only source positions from the supplied atoms, and follow the timestamp policy above.
 
 ## Output
 
-Return **JSON only**:
-
-```
-{
-  "teaser": "2-5 sentences of Russian text",
-  "timestamps": [{"seconds": 0, "label": "короткая тема"}],
-  "reasoning": "one line, for the author's eyes only: why you chose this angle"
-}
-```
-
-`teaser` must not contain the timestamp lines — they are rendered separately.
+{{output_instructions}}
 
 ## Author voice reference
 

@@ -92,7 +92,6 @@ async def main():
                 user="Health test.",
                 schema=json_schema_for(SmokeResult),
                 schema_name="SmokeResult",
-                max_tokens=1024,
             )
             result = SmokeResult.model_validate(raw)
             if not result.ok:

@@ -150,6 +150,14 @@ async def test_semantic_public_teaser_never_contains_private_drafts(settings):
     from tests.test_semantic import SemanticFake, art_atoms
 
     class ContentFake(SemanticFake):
+        async def chat_text(self, **kwargs):
+            if kwargs["label"].startswith("channel_teaser"):
+                assert "PRIVATE DRAFT SECRET" not in kwargs["user"]
+                return "Listen to these ideas"
+            if kwargs["label"].startswith("threads_editor"):
+                return "PRIVATE DRAFT SECRET"
+            return "SKIP: not suitable"
+
         async def chat_json(self, **kwargs):
             if kwargs["schema_name"] == "RoutingResult":
                 return {

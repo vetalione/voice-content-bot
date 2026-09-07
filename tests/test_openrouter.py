@@ -146,11 +146,14 @@ async def test_truncation_logs_model_and_remains_bounded(or_settings, caplog):
         agent = StructuredAgent(
             OpenRouterClient(or_settings, http), PromptLibrary(or_settings.prompts_dir), or_settings
         )
-        with caplog.at_level("INFO"), pytest.raises(LLMGenerationError, match="output_budget=3000"):
+        with (
+            caplog.at_level("INFO"),
+            pytest.raises(LLMGenerationError, match="output_budget=provider_default"),
+        ):
             with recording_usage(105, "truncated") as usage:
                 await agent.request(ChannelTeaser, system="s", user="u", max_tokens=3000)
-    assert len(seen) == usage.requests == 2
-    assert usage.output_tokens == 6000
+    assert len(seen) == usage.requests == 1
+    assert usage.output_tokens == 3000
     assert "finish_reason=length" in caplog.text and "reasoning_tokens=2891" in caplog.text
 
 
@@ -379,9 +382,11 @@ async def test_hour_recording_has_bounded_calls_without_groq_text(or_settings, m
 
     def handler(req):
         body = json.loads(req.content)
-        name = body["response_format"]["json_schema"]["name"]
+        name = body.get("response_format", {}).get("json_schema", {}).get("name", "Text")
         assert body["reasoning"] == {"effort": "none", "enabled": False}
         names.append(name)
+        if name == "Text":
+            return completion("Готовый текст без JSON.")
         if name == "AtomExtraction":
             counts["extraction"] += 1
             n = counts["extraction"]
@@ -417,6 +422,6 @@ async def test_hour_recording_has_bounded_calls_without_groq_text(or_settings, m
         with recording_usage(3600, "hour") as usage:
             result = await pipeline.analyse(make_job_request(), transcript, 1, time.monotonic())
     assert counts["extraction"] == 6
-    assert names.count("ThreadsBatch") == 2 and names.count("ReelsBatch") == 2
-    assert names.count("ChannelTeaser") == 1 and "AtomEnrichment" not in names
-    assert usage.requests == 11 and len(result.atoms) == 48
+    assert names.count("Text") == 9  # one teaser + four drafts per platform
+    assert "AtomEnrichment" not in names
+    assert usage.requests == 15 and len(result.atoms) == 48

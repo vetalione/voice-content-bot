@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from app.models.atoms import ContentAtom
-from app.models.content import ChannelTeaser
+from app.models.content import ChannelTeaser, TeaserTimestamp
 from app.models.transcript import Transcript
 from app.utils.timecode import format_timecode
 
@@ -29,6 +29,26 @@ class ChannelTeaserAgent(StructuredAgent):
             if atom.confidence >= _MIN_TIMESTAMP_CONFIDENCE and atom.end_seconds > 0
         ]
         timestamps_allowed = self.settings.teaser_include_timestamps and len(reliable) >= 3
+
+        if self.settings.text_provider == "openrouter":
+            text = await self.request_text(
+                system=self.system_prompt(
+                    timestamps_policy="Do not write timestamps; the application adds verified source times separately.",
+                    output_instructions="Return only the teaser's 2–5 Russian sentences. No JSON, labels, explanation or timestamps.",
+                ),
+                user=f"Recording duration: {format_timecode(transcript.duration)}.\nCONTENT ATOMS:\n{render_atoms(atoms)}",
+                temperature=0.75,
+            )
+            timestamps = (
+                [
+                    TeaserTimestamp(seconds=a.start_seconds, label=a.label[:120])
+                    for a in sorted(reliable, key=lambda a: a.start_seconds)
+                    if 0 <= a.start_seconds <= transcript.duration
+                ][:5]
+                if timestamps_allowed
+                else []
+            )
+            return ChannelTeaser(teaser=text, timestamps=timestamps)
 
         system = self.system_prompt(
             timestamps_policy=(
