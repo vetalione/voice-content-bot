@@ -24,9 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import httpx
 
 from app.config import get_settings
-
-# channel_post is what production mode needs; message covers private mode.
-ALLOWED_UPDATES = ["message", "channel_post", "edited_channel_post"]
+from app.telegram.webhook import ALLOWED_UPDATES
 
 
 async def call(token: str, method: str, **params: object) -> dict:

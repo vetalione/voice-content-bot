@@ -8,6 +8,13 @@ which ones deserve a Threads draft, a Reel, or archive-only storage.
 ## Choosing models in Telegram
 
 Send `/settings` (or `/models`) in the bot's private chat as `OWNER_TELEGRAM_ID`.
+Telegram must subscribe to `callback_query` for buttons. At startup the bot adds
+this subscription to an existing webhook matching `PUBLIC_BASE_URL` +
+`WEBHOOK_PATH`, using the deployed `WEBHOOK_SECRET` and preserving pending updates.
+It does not change another destination or a custom certificate. For manual setup,
+run `.venv/bin/python scripts/set_webhook.py set` with the matching production
+URL and secret in `.env`. Pending updates are preserved unless you explicitly
+pass `--drop-pending`.
 Choose free automatic routing (`openrouter/free`), a specific free text model from
 the live catalog, or one of the configured paid Kimi models. The free list is
 paginated and checks zero pricing; catalog presence does not guarantee current

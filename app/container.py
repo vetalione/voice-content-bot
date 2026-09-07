@@ -34,6 +34,7 @@ from app.services.transcription import GroqTranscriber
 from app.telegram.delivery import TelegramDelivery, build_bot
 from app.telegram.downloader import TelegramFileDownloader
 from app.telegram.handlers import JobSubmitter, build_router
+from app.telegram.webhook import sync_webhook_updates
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class Container:
         if hasattr(self.text, "preflight"):
             await self.text.preflight()
         await self.runner.start()
+        await sync_webhook_updates(self.bot, self.settings)
 
     async def shutdown(self) -> None:
         await self.runner.stop()
