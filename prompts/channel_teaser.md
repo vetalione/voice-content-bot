@@ -36,7 +36,7 @@ editorial voice.
 
 {{timestamps_policy}}
 
-If you include timestamps: 3–5 lines maximum, each a **short thematic label** of
+If you include timestamps: 1–5 lines, each a **short thematic label** of
 2–6 words (not a sentence, no final period). Use only source positions from the supplied atoms, and follow the timestamp policy above.
 
 ## Output

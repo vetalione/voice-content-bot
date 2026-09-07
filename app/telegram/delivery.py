@@ -102,12 +102,7 @@ class TelegramDelivery:
     async def publish_to_channel(
         self, text: str, reply_to_message_id: int | None = None
     ) -> int | None:
-        """Publish the teaser, preferring a reply to the original post.
-
-        Replies inside a channel work, but only while the source post exists and
-        is not too old for the client; if Telegram refuses, the teaser is posted
-        as the next channel message instead of being lost.
-        """
+        """Publish as a reply when configured; never silently create a standalone post."""
         channel_id = self._settings.allowed_channel_id
         if self._settings.dry_run_publish:
             logger.warning("DRY_RUN_PUBLISH is on — teaser not published")
@@ -116,20 +111,14 @@ class TelegramDelivery:
         reply_parameters = None
         if reply_to_message_id and self._settings.teaser_reply_to_source:
             reply_parameters = ReplyParameters(
-                message_id=reply_to_message_id, allow_sending_without_reply=True
+                message_id=reply_to_message_id, allow_sending_without_reply=False
             )
 
-        try:
-            message_id = await self._send_with_retry(
-                channel_id,
-                text,
-                parse_mode=None,
-                reply_parameters=reply_parameters,
-            )
-        except TelegramAPIError as error:
-            if reply_parameters is None:
-                raise
-            logger.warning("Reply publish failed (%s); posting as a new message", error)
-            message_id = await self._send_with_retry(channel_id, text, parse_mode=None)
+        message_id = await self._send_with_retry(
+            channel_id,
+            text,
+            parse_mode=None,
+            reply_parameters=reply_parameters,
+        )
         logger.info("Published teaser to channel %s as %s", channel_id, message_id)
         return message_id

@@ -48,6 +48,14 @@ first selection, existing environment configuration remains active.
 
 ## Architecture and reuse
 
+Channel voice/audio posts in `ALLOWED_CHANNEL_ID` receive the public teaser as a
+reply to the original message when `DRY_RUN_PUBLISH=false` and
+`TEASER_REPLY_TO_SOURCE=true` (the defaults). `TEASER_INCLUDE_TIMESTAMPS=true`
+adds up to five reliable source timecodes, including for one- or two-topic audio.
+When Telegram cannot attach the reply, the job reports an error to the owner;
+it does not silently publish an unrelated standalone channel post. Private voice
+messages produce owner reports only. The bot needs channel posting permission.
+
 Telegram whitelist/webhook, private forwarding, job runner/heartbeats, Groq Whisper,
 ffmpeg preparation, long-audio chunks, overlap merge, absolute timestamps, delivery
 and channel publication guard are reused. Legacy Groq/OpenRouter text clients and

@@ -28,7 +28,7 @@ class ChannelTeaserAgent(StructuredAgent):
             for atom in atoms
             if atom.confidence >= _MIN_TIMESTAMP_CONFIDENCE and atom.end_seconds > 0
         ]
-        timestamps_allowed = self.settings.teaser_include_timestamps and len(reliable) >= 3
+        timestamps_allowed = self.settings.teaser_include_timestamps and bool(reliable)
 
         if self.settings.text_provider == "openrouter":
             text = await self.request_text(
@@ -52,7 +52,7 @@ class ChannelTeaserAgent(StructuredAgent):
 
         system = self.system_prompt(
             timestamps_policy=(
-                "Timestamps are reliable for this recording. You MAY include 3-5 "
+                "Timestamps are reliable for this recording. Include 1-5 "
                 "short thematic timestamp lines."
                 if timestamps_allowed
                 else "Timestamps are NOT reliable for this recording. Return an "
